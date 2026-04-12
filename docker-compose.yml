@@ -1,0 +1,14 @@
+services:
+  tuya-lightbar-control:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8042:8000"
+    volumes:
+      # Persist settings (brightness, auto on/off, etc.) across restarts
+      - ./settings.json:/app/settings.json
+    # If the device is unreachable via bridge networking (e.g. running on a VPS),
+    # switch to host networking so tinytuya can reach the LAN device directly:
+    # network_mode: host
+    # (and remove the ports mapping above when using host mode)

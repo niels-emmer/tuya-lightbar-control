@@ -1,0 +1,6 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+tinytuya==1.17.6
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+aiohttp==3.11.11
