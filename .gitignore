@@ -9,4 +9,3 @@ frontend/dist/
 
 # Runtime / secrets
 .env
-settings.json
