@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import time
 from typing import Optional
 
 import aiohttp
@@ -11,23 +11,20 @@ from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
 
-_BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
-
-# Segments are 0-indexed (0 = leftmost, 19 = rightmost).
-# CENTER_DEFAULT sits in the middle; green extends right, red extends left.
+_WS_BASE = "wss://stream.binance.com:9443/stream"
 _NSEG = 20
-_CENTER_DEFAULT = 9  # 0-indexed → segment 10 in 1-indexed
+_CENTER_DEFAULT = 9  # 0-indexed; segment 10 in 1-indexed
 
 
 class CryptoEffect(BaseEffect):
     name = "crypto"
     label = "Crypto Candlestick"
     description = (
-        "Live 1-minute candlestick centred on the rolling 5-minute reference price. "
+        "Live candlestick via Binance WebSocket. "
+        "The centre marker (dim white) represents the 5-minute open price. "
         "Green segments extend right (price up), red extend left (price down). "
-        "Every 5 minutes the reference price advances to the latest 5m close and the "
-        "centre resets. The centre also shifts automatically if the move would overflow "
-        "the bar."
+        "The display updates as fast as the hardware allows (~5 s/sweep). "
+        "When a new 5-minute candle opens the centre resets to the middle."
     )
     params_schema = [
         ParamSchema(
@@ -54,83 +51,122 @@ class CryptoEffect(BaseEffect):
         max_pct = float(params.get("max_pct", 0.3))
         loop = asyncio.get_running_loop()
 
-        # State
-        ref_price: Optional[float] = None
-        center_idx: int = _CENTER_DEFAULT
-        last_5m_ts: float = 0.0  # unix time of last 5m reference update
+        coin_lower = coin.lower()
+        streams = f"{coin_lower}@kline_1m/{coin_lower}@kline_5m"
+        url = f"{_WS_BASE}?streams={streams}"
 
-        while True:
-            now = time.monotonic()
+        # Mutable state shared between the WS reader and the writer task
+        state = {
+            "ref_price": None,       # 5m open — the centre reference
+            "prev_5m_open": None,    # detect when a new 5m candle starts
+            "center_idx": _CENTER_DEFAULT,
+            "busy": False,           # True while set_all_segments is running
+        }
 
+        async def _push(colors: list) -> None:
+            """Run set_all_segments in a thread; clear busy flag when done."""
             try:
-                # ── Fetch latest 1m close and 5m open ──────────────────────
-                one_min_close, five_min_open = await asyncio.gather(
-                    _fetch_latest_close(coin, "1m"),
-                    _fetch_candle_open(coin, "5m"),
-                )
-
-                # ── Update 5m reference every 5 minutes ────────────────────
-                # Use the OPEN of the current 5m candle as the reference so
-                # we always compare against where this 5m period started.
-                if ref_price is None or (now - last_5m_ts) >= 300:
-                    ref_price = five_min_open
-                    center_idx = _CENTER_DEFAULT
-                    last_5m_ts = now
-                    logger.info(f"Crypto [{coin}] 5m open (ref) updated: {ref_price:.4f}")
-
-                # ── Compute move from reference ─────────────────────────────
-                pct = (one_min_close - ref_price) / ref_price * 100
-                n_seg = round(abs(pct) / max_pct * 10)
-                n_seg = min(n_seg, 10)  # cap at half-bar
-
-                # ── Fit check: shift center if bar would overflow ───────────
-                if pct >= 0:
-                    # green extends right: need center_idx + n_seg <= 19
-                    if center_idx + n_seg > _NSEG - 1:
-                        center_idx = _NSEG - 1 - n_seg
-                else:
-                    # red extends left: need center_idx - n_seg >= 0
-                    if center_idx - n_seg < 0:
-                        center_idx = n_seg
-
-                center_idx = max(0, min(_NSEG - 1, center_idx))
-
-                # ── Build segment colors ────────────────────────────────────
-                colors = _build_colors(pct, n_seg, center_idx, brightness)
-
                 await loop.run_in_executor(
                     None, lambda c=colors: driver.set_all_segments(c)
                 )
+            finally:
+                state["busy"] = False
 
-                logger.info(
-                    f"Crypto [{coin}] 1m={one_min_close:.4f} ref={ref_price:.4f} "
-                    f"pct={pct:+.3f}% n_seg={n_seg} center={center_idx}"
-                )
+        while True:  # outer loop: reconnect on disconnect / error
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.ws_connect(
+                        url,
+                        heartbeat=20,
+                        receive_timeout=60,
+                    ) as ws:
+                        logger.info(f"Crypto [{coin}] WebSocket connected")
+
+                        async for msg in ws:
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                _handle_message(
+                                    msg.data, coin, max_pct, brightness,
+                                    state, loop, _push,
+                                )
+                            elif msg.type in (
+                                aiohttp.WSMsgType.ERROR,
+                                aiohttp.WSMsgType.CLOSED,
+                            ):
+                                logger.warning(f"Crypto [{coin}] WS closed/error")
+                                break
 
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.warning(f"Crypto effect error ({coin}): {e}")
+                logger.warning(f"Crypto [{coin}] WS error: {e} — reconnecting in 5 s")
 
-            await asyncio.sleep(60)
-
-
-async def _fetch_latest_close(coin: str, interval: str) -> float:
-    url = f"{_BINANCE_KLINES}?symbol={coin}&interval={interval}&limit=1"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
-            r.raise_for_status()
-            data = await r.json()
-            return float(data[0][4])  # index 4 = close price
+            await asyncio.sleep(5)
 
 
-async def _fetch_candle_open(coin: str, interval: str) -> float:
-    url = f"{_BINANCE_KLINES}?symbol={coin}&interval={interval}&limit=1"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
-            r.raise_for_status()
-            data = await r.json()
-            return float(data[0][1])  # index 1 = open price
+def _handle_message(
+    raw: str,
+    coin: str,
+    max_pct: float,
+    brightness: int,
+    state: dict,
+    loop: asyncio.AbstractEventLoop,
+    push_fn,
+) -> None:
+    try:
+        envelope = json.loads(raw)
+    except Exception:
+        return
+
+    stream: str = envelope.get("stream", "")
+    k: dict = envelope.get("data", {}).get("k", {})
+    if not k:
+        return
+
+    # ── 5m kline: track the open as our reference price ──────────────────────
+    if "@kline_5m" in stream:
+        new_open = float(k["o"])
+        if new_open != state["prev_5m_open"]:
+            state["ref_price"] = new_open
+            state["prev_5m_open"] = new_open
+            state["center_idx"] = _CENTER_DEFAULT
+            logger.info(f"Crypto [{coin}] new 5m candle — ref={new_open:.4f}")
+        return
+
+    # ── 1m kline: update display ──────────────────────────────────────────────
+    if "@kline_1m" not in stream:
+        return
+
+    ref_price: Optional[float] = state["ref_price"]
+    if ref_price is None:
+        return  # wait for first 5m event
+
+    current_price = float(k["c"])
+    pct = (current_price - ref_price) / ref_price * 100
+    n_seg = min(10, round(abs(pct) / max_pct * 10))
+
+    # Fit check: shift centre so the candle stays on the bar
+    center_idx: int = state["center_idx"]
+    if pct >= 0:
+        if center_idx + n_seg > _NSEG - 1:
+            center_idx = _NSEG - 1 - n_seg
+    else:
+        if center_idx - n_seg < 0:
+            center_idx = n_seg
+    center_idx = max(0, min(_NSEG - 1, center_idx))
+    state["center_idx"] = center_idx
+
+    logger.debug(
+        f"Crypto [{coin}] price={current_price:.4f} ref={ref_price:.4f} "
+        f"pct={pct:+.3f}% n_seg={n_seg} center={center_idx}"
+    )
+
+    # Only push if the previous sweep has finished
+    if state["busy"]:
+        return
+
+    colors = _build_colors(pct, n_seg, center_idx, brightness)
+    state["busy"] = True
+    asyncio.create_task(push_fn(colors))
 
 
 def _build_colors(
@@ -139,31 +175,20 @@ def _build_colors(
     center_idx: int,
     brightness: int,
 ) -> list:
-    """Build the 20-entry color list for the current candle state.
-
-    Layout (0-indexed):
-      - center_idx:                  dim white marker (reference price)
-      - center_idx+1 … center_idx+n: bright green  (price up)
-      - center_idx-1 … center_idx-n: bright red    (price down)
-      - everything else:             off (None)
-    """
     colors: list = [None] * _NSEG
 
-    # Centre marker — dim white so it's visible but not distracting
-    center_v = max(5, round(brightness * 0.15))
-    colors[center_idx] = (0, 0, center_v)
+    # Centre marker — dim white
+    colors[center_idx] = (0, 0, max(5, round(brightness * 0.15)))
 
     if n_seg == 0:
         return colors
 
     if pct >= 0:
-        # Green extends right from center
         for i in range(1, n_seg + 1):
             idx = center_idx + i
             if 0 <= idx < _NSEG:
                 colors[idx] = (120, 100, brightness)
     else:
-        # Red extends left from center
         for i in range(1, n_seg + 1):
             idx = center_idx - i
             if 0 <= idx < _NSEG:
