@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import {
-  Card, Text, Group, Badge, Anchor, Divider, Button, Select, Stack, Title,
+  Card, Text, Group, Badge, Button, SimpleGrid, Stack, Title, Divider,
 } from "@mantine/core";
 import { IconUpload, IconDownload } from "@tabler/icons-react";
 import type { DeviceStatus, EffectDef, EffectState } from "../api";
@@ -10,11 +10,9 @@ interface Props {
   backendReady: boolean;
   effects: EffectDef[];
   activeEffect: EffectState | null;
-  visibleCards: string[];
-  hiddenCards: string[];
+  selectedEffect: string | null;
+  onSelectEffect: (name: string) => void;
   onImport: (name: string, params: Record<string, unknown>) => void;
-  onRemoveCard: (name: string) => void;
-  onRestoreCard: (name: string) => void;
 }
 
 export function StatusCard({
@@ -22,14 +20,11 @@ export function StatusCard({
   backendReady,
   effects,
   activeEffect,
-  visibleCards,
-  hiddenCards,
+  selectedEffect,
+  onSelectEffect,
   onImport,
-  onRemoveCard,
-  onRestoreCard,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [cardToRemove, setCardToRemove] = useState<string | null>(null);
 
   const backendColor = backendReady ? "green" : "red";
   const backendLabel = backendReady ? "Backend online" : "Backend offline";
@@ -82,12 +77,9 @@ export function StatusCard({
     e.target.value = "";
   };
 
-  const visibleEffects = effects.filter((e) => visibleCards.includes(e.name));
-  const hiddenEffects = effects.filter((e) => hiddenCards.includes(e.name));
-
   return (
     <Card withBorder radius="md" p="md">
-      <Stack gap="md">
+      <Stack gap="sm">
         {/* Header */}
         <div>
           <Title order={4}>Status</Title>
@@ -103,19 +95,31 @@ export function StatusCard({
           )}
         </Group>
 
-        {/* Links */}
-        <Group gap="md">
-          <Anchor href="docs/" target="_blank" size="sm">
-            API docs ↗
-          </Anchor>
-          {visibleEffects.map((e) => (
-            <Anchor key={e.name} href={`#${e.name}`} size="sm">
-              {e.label}
-            </Anchor>
-          ))}
-        </Group>
+        <Divider label="Effects" labelPosition="left" />
 
-        <Divider label="Effect cards" labelPosition="left" />
+        {/* Effect selector buttons */}
+        {effects.length > 0 && (
+          <SimpleGrid cols={{ base: 2, xs: 3 }} spacing="xs">
+            {effects.map((e) => {
+              const isSelected = e.name === selectedEffect;
+              const isActive = e.name === activeEffect?.name;
+              return (
+                <Button
+                  key={e.name}
+                  size="xs"
+                  variant={isSelected ? "filled" : "light"}
+                  color={isActive ? "blue" : isSelected ? "gray" : "gray"}
+                  onClick={() => onSelectEffect(e.name)}
+                  styles={{ root: { fontWeight: isSelected ? 600 : 400 } }}
+                >
+                  {e.label}
+                </Button>
+              );
+            })}
+          </SimpleGrid>
+        )}
+
+        <Divider label="Presets" labelPosition="left" />
 
         {/* Import / Export */}
         <Group gap="xs">
@@ -144,55 +148,6 @@ export function StatusCard({
             Export active
           </Button>
         </Group>
-
-        {/* Hide a card */}
-        {visibleEffects.length > 0 && (
-          <Group gap="xs" align="flex-end">
-            <Select
-              placeholder="Select card to hide…"
-              size="xs"
-              data={visibleEffects.map((e) => ({ value: e.name, label: e.label }))}
-              value={cardToRemove}
-              onChange={setCardToRemove}
-              style={{ flex: 1 }}
-              clearable
-            />
-            <Button
-              size="xs"
-              color="orange"
-              variant="light"
-              disabled={!cardToRemove}
-              onClick={() => {
-                if (cardToRemove) {
-                  onRemoveCard(cardToRemove);
-                  setCardToRemove(null);
-                }
-              }}
-            >
-              Hide card
-            </Button>
-          </Group>
-        )}
-
-        {/* Restore hidden cards */}
-        {hiddenEffects.length > 0 && (
-          <div>
-            <Text size="xs" c="dimmed" mb={6}>Hidden cards</Text>
-            <Group gap="xs">
-              {hiddenEffects.map((e) => (
-                <Button
-                  key={e.name}
-                  size="xs"
-                  variant="outline"
-                  color="gray"
-                  onClick={() => onRestoreCard(e.name)}
-                >
-                  + {e.label}
-                </Button>
-              ))}
-            </Group>
-          </div>
-        )}
       </Stack>
     </Card>
   );

@@ -13,17 +13,10 @@ import { TopBar } from "./components/TopBar";
 import { StatusCard } from "./components/StatusCard";
 import { EffectCard } from "./components/EffectCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
+import { Footer } from "./components/Footer";
 
-const HIDDEN_KEY = "lightbar-hidden-cards";
 const OVERRIDES_KEY = "lightbar-param-overrides";
 
-function loadHidden(): string[] {
-  try { return JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]"); }
-  catch { return []; }
-}
-function saveHidden(h: string[]) {
-  localStorage.setItem(HIDDEN_KEY, JSON.stringify(h));
-}
 function loadOverrides(): Record<string, Record<string, unknown>> {
   try { return JSON.parse(localStorage.getItem(OVERRIDES_KEY) ?? "{}"); }
   catch { return {}; }
@@ -38,7 +31,7 @@ export default function App() {
   const [effects, setEffects] = useState<EffectDef[]>([]);
   const [currentEffect, setCurrentEffect] = useState<EffectState | null>(null);
   const [loading, setLoading] = useState(true);
-  const [hiddenCards, setHiddenCards] = useState<string[]>(loadHidden);
+  const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [paramOverrides, setParamOverrides] = useState<Record<string, Record<string, unknown>>>(loadOverrides);
   const [settingsOpened, { open: openSettings, close: closeSettings }] = useDisclosure(false);
 
@@ -64,7 +57,11 @@ export default function App() {
 
   useEffect(() => {
     Promise.all([
-      api.getEffects().then(setEffects).catch(() => {}),
+      api.getEffects().then((list) => {
+        setEffects(list);
+        // Default selection: first effect
+        setSelectedEffect((prev) => prev ?? list[0]?.name ?? null);
+      }).catch(() => {}),
       fetchStatus(),
       fetchEffect(),
     ]).finally(() => setLoading(false));
@@ -80,37 +77,20 @@ export default function App() {
     await fetchEffect();
   };
 
-  const handleRemoveCard = (name: string) => {
-    const next = [...hiddenCards, name];
-    setHiddenCards(next);
-    saveHidden(next);
-  };
-
-  const handleRestoreCard = (name: string) => {
-    const next = hiddenCards.filter((n) => n !== name);
-    setHiddenCards(next);
-    saveHidden(next);
-  };
-
   const handleImport = async (name: string, params: Record<string, unknown>) => {
     try {
       await api.activateEffect(name, params);
-      // Restore card if hidden
-      if (hiddenCards.includes(name)) {
-        handleRestoreCard(name);
-      }
-      // Store param override so the card pre-fills
       const nextOverrides = { ...paramOverrides, [name]: params };
       setParamOverrides(nextOverrides);
       saveOverrides(nextOverrides);
+      setSelectedEffect(name);
       await fetchEffect();
     } catch {
       alert("Failed to activate imported effect.");
     }
   };
 
-  const visibleCards = effects.map((e) => e.name).filter((n) => !hiddenCards.includes(n));
-  const hiddenCardNames = hiddenCards.filter((n) => effects.some((e) => e.name === n));
+  const selectedEffectDef = effects.find((e) => e.name === selectedEffect) ?? null;
 
   if (loading) {
     return (
@@ -122,7 +102,7 @@ export default function App() {
 
   return (
     <>
-      <AppShell header={{ height: 48 }}>
+      <AppShell header={{ height: 48 }} footer={{ height: "auto" }}>
         <AppShell.Header>
           <TopBar
             activeEffect={currentEffect}
@@ -139,35 +119,31 @@ export default function App() {
                 backendReady={backendReady}
                 effects={effects}
                 activeEffect={currentEffect}
-                visibleCards={visibleCards}
-                hiddenCards={hiddenCardNames}
+                selectedEffect={selectedEffect}
+                onSelectEffect={setSelectedEffect}
                 onImport={handleImport}
-                onRemoveCard={handleRemoveCard}
-                onRestoreCard={handleRestoreCard}
               />
 
               {effects.length === 0 ? (
                 <Text c="dimmed" ta="center" size="sm">
                   Could not load effects — is the backend running?
                 </Text>
-              ) : (
-                visibleCards.map((name) => {
-                  const effect = effects.find((e) => e.name === name);
-                  if (!effect) return null;
-                  return (
-                    <EffectCard
-                      key={name}
-                      effect={effect}
-                      activeEffect={currentEffect}
-                      onEffectChange={fetchEffect}
-                      paramOverride={paramOverrides[name]}
-                    />
-                  );
-                })
-              )}
+              ) : selectedEffectDef ? (
+                <EffectCard
+                  key={selectedEffect}
+                  effect={selectedEffectDef}
+                  activeEffect={currentEffect}
+                  onEffectChange={fetchEffect}
+                  paramOverride={paramOverrides[selectedEffect!]}
+                />
+              ) : null}
             </Stack>
           </Container>
         </AppShell.Main>
+
+        <AppShell.Footer>
+          <Footer />
+        </AppShell.Footer>
       </AppShell>
 
       <SettingsDrawer opened={settingsOpened} onClose={closeSettings} />
