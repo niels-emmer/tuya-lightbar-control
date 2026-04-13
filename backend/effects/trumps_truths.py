@@ -131,10 +131,10 @@ class TrumpsTruthsEffect(BaseEffect):
         filled = min(20, round(count / max_truths * 20))
         colors = []
         for i in range(20):
+            # Gradient: green (hue=120) at bottom → yellow (60) → red (0) at top
+            hue = round(120 - (120 / 19) * i)
             if i < filled:
-                # Red — Truth Social brand color
-                colors.append((0, 100, brightness))
+                colors.append((hue, 100, brightness))
             else:
-                # Dim red background so bar "glows" slightly
-                colors.append((0, 80, max(3, round(brightness * 0.06))))
+                colors.append((hue, 80, max(3, round(brightness * 0.06))))
         return colors
