@@ -10,7 +10,9 @@ import {
   Divider,
   NumberInput,
   Alert,
+  Switch,
 } from "@mantine/core";
+import { useMantineColorScheme, useComputedColorScheme } from "@mantine/core";
 import { IconCheck, IconInfoCircle } from "@tabler/icons-react";
 import { api, type AppSettings } from "../api";
 
@@ -28,6 +30,9 @@ const DEFAULT: AppSettings = {
 };
 
 export function SettingsDrawer({ opened, onClose }: Props) {
+  const { setColorScheme } = useMantineColorScheme();
+  const computedScheme = useComputedColorScheme("dark");
+
   const [settings, setSettings] = useState<AppSettings>(DEFAULT);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -66,6 +71,16 @@ export function SettingsDrawer({ opened, onClose }: Props) {
       size="sm"
     >
       <Stack gap="md">
+        <Switch
+          label="Dark mode"
+          checked={computedScheme === "dark"}
+          onChange={() =>
+            setColorScheme(computedScheme === "dark" ? "light" : "dark")
+          }
+        />
+
+        <Divider />
+
         <div>
           <Text size="sm" fw={500} mb={6}>Brightness</Text>
           <Slider

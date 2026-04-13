@@ -3,20 +3,34 @@ import {
   AppShell,
   Container,
   Stack,
-  Group,
-  ActionIcon,
-  Tooltip,
-  Text,
   Center,
   Loader,
+  Text,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { IconSettings } from "@tabler/icons-react";
 import { api, type DeviceStatus, type EffectDef, type EffectState } from "./api";
-import { StatusBar } from "./components/StatusBar";
-import { EffectPanel } from "./components/EffectPanel";
+import { TopBar } from "./components/TopBar";
+import { StatusCard } from "./components/StatusCard";
+import { EffectCard } from "./components/EffectCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
-import { ImportExport } from "./components/ImportExport";
+
+const HIDDEN_KEY = "lightbar-hidden-cards";
+const OVERRIDES_KEY = "lightbar-param-overrides";
+
+function loadHidden(): string[] {
+  try { return JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]"); }
+  catch { return []; }
+}
+function saveHidden(h: string[]) {
+  localStorage.setItem(HIDDEN_KEY, JSON.stringify(h));
+}
+function loadOverrides(): Record<string, Record<string, unknown>> {
+  try { return JSON.parse(localStorage.getItem(OVERRIDES_KEY) ?? "{}"); }
+  catch { return {}; }
+}
+function saveOverrides(o: Record<string, Record<string, unknown>>) {
+  localStorage.setItem(OVERRIDES_KEY, JSON.stringify(o));
+}
 
 export default function App() {
   const [status, setStatus] = useState<DeviceStatus | null>(null);
@@ -24,6 +38,8 @@ export default function App() {
   const [effects, setEffects] = useState<EffectDef[]>([]);
   const [currentEffect, setCurrentEffect] = useState<EffectState | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hiddenCards, setHiddenCards] = useState<string[]>(loadHidden);
+  const [paramOverrides, setParamOverrides] = useState<Record<string, Record<string, unknown>>>(loadOverrides);
   const [settingsOpened, { open: openSettings, close: closeSettings }] = useDisclosure(false);
 
   const fetchStatus = useCallback(async () => {
@@ -46,7 +62,6 @@ export default function App() {
     }
   }, []);
 
-  // Initial load
   useEffect(() => {
     Promise.all([
       api.getEffects().then(setEffects).catch(() => {}),
@@ -55,21 +70,47 @@ export default function App() {
     ]).finally(() => setLoading(false));
   }, [fetchStatus, fetchEffect]);
 
-  // Poll status every 5 s
   useEffect(() => {
     const id = setInterval(fetchStatus, 5000);
     return () => clearInterval(id);
   }, [fetchStatus]);
 
-  const handlePowerToggle = async () => {
-    if (!status) return;
-    await api.setPower(!status.power).catch(() => {});
-    await fetchStatus();
+  const handleStop = async () => {
+    await api.stopEffect().catch(() => {});
+    await fetchEffect();
   };
 
-  const handleEffectChange = () => {
-    fetchEffect();
+  const handleRemoveCard = (name: string) => {
+    const next = [...hiddenCards, name];
+    setHiddenCards(next);
+    saveHidden(next);
   };
+
+  const handleRestoreCard = (name: string) => {
+    const next = hiddenCards.filter((n) => n !== name);
+    setHiddenCards(next);
+    saveHidden(next);
+  };
+
+  const handleImport = async (name: string, params: Record<string, unknown>) => {
+    try {
+      await api.activateEffect(name, params);
+      // Restore card if hidden
+      if (hiddenCards.includes(name)) {
+        handleRestoreCard(name);
+      }
+      // Store param override so the card pre-fills
+      const nextOverrides = { ...paramOverrides, [name]: params };
+      setParamOverrides(nextOverrides);
+      saveOverrides(nextOverrides);
+      await fetchEffect();
+    } catch {
+      alert("Failed to activate imported effect.");
+    }
+  };
+
+  const visibleCards = effects.map((e) => e.name).filter((n) => !hiddenCards.includes(n));
+  const hiddenCardNames = hiddenCards.filter((n) => effects.some((e) => e.name === n));
 
   if (loading) {
     return (
@@ -81,44 +122,49 @@ export default function App() {
 
   return (
     <>
-      <AppShell header={{ height: 44 }}>
+      <AppShell header={{ height: 48 }}>
         <AppShell.Header>
-          <StatusBar
-            status={status}
-            backendReady={backendReady}
-            onPowerToggle={handlePowerToggle}
-            onRefresh={fetchStatus}
+          <TopBar
+            activeEffect={currentEffect}
+            onStop={handleStop}
+            onSettingsOpen={openSettings}
           />
         </AppShell.Header>
 
         <AppShell.Main>
           <Container size="sm" py="md">
             <Stack gap="md">
-              {effects.length > 0 ? (
-                <EffectPanel
-                  effects={effects}
-                  currentEffect={currentEffect}
-                  onEffectChange={handleEffectChange}
-                  deviceOnline={status?.online ?? false}
-                />
-              ) : (
-                <Text c="dimmed" ta="center">
+              <StatusCard
+                status={status}
+                backendReady={backendReady}
+                effects={effects}
+                activeEffect={currentEffect}
+                visibleCards={visibleCards}
+                hiddenCards={hiddenCardNames}
+                onImport={handleImport}
+                onRemoveCard={handleRemoveCard}
+                onRestoreCard={handleRestoreCard}
+              />
+
+              {effects.length === 0 ? (
+                <Text c="dimmed" ta="center" size="sm">
                   Could not load effects — is the backend running?
                 </Text>
+              ) : (
+                visibleCards.map((name) => {
+                  const effect = effects.find((e) => e.name === name);
+                  if (!effect) return null;
+                  return (
+                    <EffectCard
+                      key={name}
+                      effect={effect}
+                      activeEffect={currentEffect}
+                      onEffectChange={fetchEffect}
+                      paramOverride={paramOverrides[name]}
+                    />
+                  );
+                })
               )}
-
-              <Group justify="space-between" px={4}>
-                <ImportExport
-                  currentEffect={currentEffect}
-                  effects={effects}
-                  onImport={handleEffectChange}
-                />
-                <Tooltip label="Settings">
-                  <ActionIcon variant="subtle" color="gray" onClick={openSettings}>
-                    <IconSettings size={18} />
-                  </ActionIcon>
-                </Tooltip>
-              </Group>
             </Stack>
           </Container>
         </AppShell.Main>
