@@ -105,7 +105,7 @@ export function StatusCard({
 
         {/* Links */}
         <Group gap="md">
-          <Anchor href="http://localhost:8000/docs" target="_blank" size="sm">
+          <Anchor href="docs/" target="_blank" size="sm">
             API docs ↗
           </Anchor>
           {visibleEffects.map((e) => (

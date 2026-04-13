@@ -61,6 +61,7 @@ class CryptoEffect(BaseEffect):
             "prev_5m_open": None,    # detect when a new 5m candle starts
             "center_idx": _CENTER_DEFAULT,
             "busy": False,           # True while set_all_segments is running
+            "tick": False,           # alternates on each data push (sign of life)
         }
 
         async def _push(colors: list) -> None:
@@ -164,7 +165,8 @@ def _handle_message(
     if state["busy"]:
         return
 
-    colors = _build_colors(pct, n_seg, center_idx, brightness)
+    state["tick"] = not state["tick"]
+    colors = _build_colors(pct, n_seg, center_idx, brightness, state["tick"])
     state["busy"] = True
     asyncio.create_task(push_fn(colors))
 
@@ -174,11 +176,13 @@ def _build_colors(
     n_seg: int,
     center_idx: int,
     brightness: int,
+    tick: bool = False,
 ) -> list:
     colors: list = [None] * _NSEG
 
-    # Centre marker — dim white
-    colors[center_idx] = (0, 0, max(5, round(brightness * 0.15)))
+    # Centre marker — alternates between dim and mid white as sign of life
+    centre_v = round(brightness * 0.4) if tick else max(5, round(brightness * 0.15))
+    colors[center_idx] = (0, 0, centre_v)
 
     if n_seg == 0:
         return colors

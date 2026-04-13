@@ -24,6 +24,7 @@ class EffectRunner:
             raise ValueError(f"Unknown effect: {name!r}")
 
         await self.stop()
+        driver.set_power(True)
         self._current = {"name": name, "params": params}
         self._task = asyncio.create_task(self._run(effect, driver, params, brightness))
 
