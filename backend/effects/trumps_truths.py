@@ -136,5 +136,5 @@ class TrumpsTruthsEffect(BaseEffect):
             if i < filled:
                 colors.append((hue, 100, brightness))
             else:
-                colors.append((hue, 80, max(3, round(brightness * 0.06))))
+                colors.append(None)
         return colors
