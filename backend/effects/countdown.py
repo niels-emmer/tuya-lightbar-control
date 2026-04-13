@@ -51,8 +51,8 @@ class CountdownEffect(BaseEffect):
                 )
                 last_n_lit = n_lit
 
-            # Sleep until ~half-segment interval, minimum 5s
-            interval = max(5.0, total_seconds / 40)
+            # Sleep one segment's worth of time, minimum 1s
+            interval = max(1.0, total_seconds / 20)
             await asyncio.sleep(interval)
 
         # Flash red × 3 then leave dim red
