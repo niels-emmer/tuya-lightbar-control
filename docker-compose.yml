@@ -8,6 +8,9 @@ services:
     volumes:
       # Persist settings (brightness, auto on/off, etc.) across restarts
       - ./settings.json:/app/settings.json
+      # Expose host network stats for the network_traffic effect.
+      # Without this, the container only sees its own virtual interface.
+      - /proc/net:/host_proc_net:ro
     # If the device is unreachable via bridge networking (e.g. running on a VPS),
     # switch to host networking so tinytuya can reach the LAN device directly:
     # network_mode: host
