@@ -1,6 +1,6 @@
 # tuya-lightbar-control
 
-A low-latency REST API and interactive frontend for precise, segment-level control of the **Battletron Gaming Light Bar** (Tuya v3.5, LAN protocol). Enables scripted patterns, data-driven visualizations (crypto candlesticks, weather, rain probability), and external integrations — beyond what the proprietary mobile app offers.
+A low-latency REST API and interactive frontend for precise, segment-level control of the **Battletron Gaming Light Bar** (Tuya v3.5, LAN protocol). Enables scripted patterns, data-driven visualizations (crypto candlesticks, weather, rain probability, network traffic), and external integrations — beyond what the proprietary mobile app offers.
 
 ## Overview
 
@@ -183,6 +183,21 @@ docker-compose up --build
 
 Frontend at `:5173`, backend at `:8000`.
 
+## Built-in Effects
+
+Effects are activated via `POST /api/effect` or from the frontend. Only one runs at a time.
+
+| Effect | Name | Description |
+|--------|------|-------------|
+| **Crypto Candlestick** | `crypto` | Live 5-minute candlestick from Binance WebSocket. Green segments extend right (price up), red left (price down). Params: `coin` (e.g. `BTCUSDT`), `max_pct`. |
+| **Rain Probability** | `rain` | Blue bar showing precipitation probability from Open-Meteo. Empty = 0 %, full = 100 %. Refreshes every 5 min. Params: `window` (15/30/45/60 min). |
+| **Countdown Timer** | `countdown` | Amber bar depleting right-to-left. Flashes red three times on expiry. Params: `minutes`. |
+| **Patterns** | `random` | Animated patterns: Rainbow, Color Blobs, Running Dots, or Pulse. Params: `style`, `speed`, `colors`, `hue`. |
+| **Trump's Truths** | `trumps_truths` | Live count of @realDonaldTrump posts on Truth Social in the past N hours. Green→red gradient. Refreshes every 5 min. Params: `hours`, `max_truths`. |
+| **Network Traffic** | `network_traffic` | Host RX/TX bandwidth on a split vertical bar. Bottom 9 segments = incoming (blue), top 9 = outgoing (green), center pulses white. Reads `/proc/net/dev`. Params: `interface`, `max_mbps`. |
+
+> **Docker note:** The network_traffic effect requires a `/proc/net` volume mount (included in `docker-compose.yml`) to read host-level interface stats rather than the container's virtual eth0.
+
 ## Performance Notes
 
 | Operation | Latency |
@@ -216,7 +231,9 @@ Frontend at `:5173`, backend at `:8000`.
 │       ├── crypto.py            # Live crypto candlestick (Binance WS)
 │       ├── rain.py              # Rain probability (Open-Meteo)
 │       ├── countdown.py         # Countdown timer
-│       └── patterns.py          # Random/static patterns
+│       ├── patterns.py          # Animated patterns (rainbow, blobs, dots, pulse)
+│       ├── trumps_truths.py     # Truth Social post counter
+│       └── network_traffic.py   # Host RX/TX bandwidth visualisation
 └── frontend/
     └── src/
         ├── App.tsx              # Root component, polling loop
