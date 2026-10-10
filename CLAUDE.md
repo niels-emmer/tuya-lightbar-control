@@ -1,34 +1,38 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code / OpenCode agents working in this repository. See also `AGENTS.md` (the repo playbook) and `docs/ARCHITECTURE.md`.
 
 ## Project
 
-`tuya-lightbar-control` is a frontend-driven controller and REST API for the Battletron Gaming Light Bar (Tuya v3.5, LAN). Unlike the sibling `../lightbar` project which uses an AI engine to generate programs, this project exposes a low-latency, segment-level API and demo frontend — enabling scripted control, data-driven modes (crypto candles, traffic jams, weather), and external integrations.
+`tuya-lightbar-control` is a frontend-driven controller and REST API for the Battletron Gaming Light Bar (Tuya v3.5, LAN). Unlike the sibling `../lightbar` project (which uses an AI engine to generate programs), this project exposes a low-latency, segment-level API and demo frontend — enabling scripted control, data-driven modes (crypto candles, traffic, weather, air quality, home power), and external integrations.
 
-The device, credentials, and Tuya protocol knowledge are shared with `../lightbar`. See `../lightbar/docs/device-protocol.md` for DP register details.
+The device, credentials, and Tuya protocol knowledge are shared with `../lightbar`.
 
 ## Dev setup
 
 ```bash
-# Backend
+# Backend (Python 3.13)
 cd backend
-python -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 
 cp ../.env.example ../.env   # fill in DEVICE_ID, DEVICE_IP, DEVICE_KEY
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8042
 ```
 
 ```bash
-# Frontend (once it exists)
+# Frontend
 cd frontend
 npm install
-npm run dev   # http://localhost:5173 — proxies /api/* to :8000
+npm run dev   # http://localhost:5173 — proxies /api/* to :8042
 ```
 
+The dev proxy targets port **8042**, so run the backend on 8042.
+
 ## API
+
+Device routes:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -37,18 +41,31 @@ npm run dev   # http://localhost:5173 — proxies /api/* to :8000
 | `POST` | `/api/color` | `{ h, s, v }` — set whole bar at once (DP 24) |
 | `POST` | `/api/segment/{n}` | `{ h, s, v }` — set segment n (1–20) via DP 61 |
 | `POST` | `/api/segment/{n}/off` | Turn segment n off |
-| `POST` | `/api/segments` | `{ colors: [{h,s,v}\|null, ...] }` — batch all 20 via `set_all_segments` |
+| `POST` | `/api/segments` | `{ colors: [{h,s,v}\|null, ...] }` — batch all 20 |
 | `POST` | `/api/scene` | `{ type, speed, colors }` — hardware scene via DP 51 |
 
-Interactive docs at `http://localhost:8000/docs`.
+Effects and settings routes:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/effects` | List registered effects + their parameter schemas |
+| `GET` | `/api/effect` | Currently active effect (or null) |
+| `POST` | `/api/effect` | `{ name, params }` — activate an effect |
+| `DELETE` | `/api/effect` | Stop the active effect |
+| `GET` | `/api/settings` | Persisted UI settings |
+| `PUT` | `/api/settings` | Update persisted UI settings |
+
+Plus `GET /healthz` (unauthenticated liveness). Interactive docs at `http://<host>:8042/docs`.
+
+When `API_KEY` is set, every `/api/*` route and the docs routes require `X-API-Key: <key>` or `Authorization: Bearer <key>`.
 
 ## Architecture
 
 ```
-Frontend (React + Mantine)
+Frontend (React 19 + Mantine 9)
   → /api/*
   ↓
-FastAPI backend  (backend/main.py)
+FastAPI backend  (backend/main.py, auth.py)
   ↓
 LightbarDriver   (backend/lightbar.py) — thread-safe tinytuya wrapper
   ↓
@@ -66,14 +83,17 @@ Battletron @ 192.168.101.130:6668  (Tuya v3.5 LAN)
 | File | Purpose |
 |------|---------|
 | `backend/main.py` | FastAPI app, all route handlers |
-| `backend/lightbar.py` | Tuya device driver (copied from `../lightbar`) |
+| `backend/auth.py` | API-key middleware |
+| `backend/lightbar.py` | Tuya device driver (tinytuya wrapper) |
 | `backend/config.py` | Pydantic Settings — loads `.env` |
 | `backend/models.py` | Pydantic request/response models |
-| `frontend/src/` | (future) React app |
+| `backend/settings_store.py` | Persistent `settings.json` |
+| `backend/effects/` | One file per effect + `registry.py`, `base.py`, `_params.py` |
+| `frontend/src/` | React app |
 
 ## Python version note
 
-The system Python is 3.9. Use `Optional[X]` from `typing` instead of `X | None` union syntax in type annotations — Pydantic evaluates annotations at runtime and the `|` union operator for types requires Python 3.10+. All files already include `from __future__ import annotations`.
+The runtime is **Python 3.13** (local venv, container, CI). `from __future__ import annotations` is kept in every module; `Optional[X]` / `List[X]` style is used for consistency with the existing code, though `X | None` is now available.
 
 ## Device protocol quick reference
 
