@@ -256,7 +256,7 @@ class LightbarDriver:
                 d = self._connect()
                 status = d.status()
                 self._online = True
-                return status.get("dps", {})
+                return {int(k): v for k, v in status.get("dps", {}).items()}
             except Exception as e:
                 logger.warning(f"Lightbar get_status failed: {e}")
                 self._online = False

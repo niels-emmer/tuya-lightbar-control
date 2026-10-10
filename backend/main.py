@@ -259,7 +259,8 @@ def get_current_effect():
         "Starts a named effect with the given parameters. "
         "Any previously running effect is stopped first. "
         "Brightness is taken from saved settings. "
-        "Available effect names: `crypto`, `rain`, `countdown`, `random`. "
+        "Call GET /api/effects first for the current list of effect names and "
+        "their parameter schemas — it always reflects what's registered. "
         "Example: `{\"name\": \"crypto\", \"params\": {\"coin\": \"BTCUSDT\"}}`"
     ),
 )
