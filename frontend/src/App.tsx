@@ -8,11 +8,12 @@ import {
   Text,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { api, type DeviceStatus, type EffectDef, type EffectState } from "./api";
+import { api, ApiError, type DeviceStatus, type EffectDef, type EffectState } from "./api";
 import { TopBar } from "./components/TopBar";
 import { StatusCard } from "./components/StatusCard";
 import { EffectCard } from "./components/EffectCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
+import { ApiKeyModal } from "./components/ApiKeyModal";
 import { Footer } from "./components/Footer";
 
 const OVERRIDES_KEY = "lightbar-param-overrides";
@@ -34,38 +35,52 @@ export default function App() {
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [paramOverrides, setParamOverrides] = useState<Record<string, Record<string, unknown>>>(loadOverrides);
   const [settingsOpened, { open: openSettings, close: closeSettings }] = useDisclosure(false);
+  const [authRequired, setAuthRequired] = useState(false);
+
+  const handleAuthError = useCallback((e: unknown) => {
+    if (e instanceof ApiError && e.status === 401) setAuthRequired(true);
+  }, []);
 
   const fetchStatus = useCallback(async () => {
     try {
       const s = await api.getStatus();
       setStatus(s);
       setBackendReady(true);
-    } catch {
+    } catch (e) {
+      handleAuthError(e);
       setBackendReady(false);
       setStatus(null);
     }
-  }, []);
+  }, [handleAuthError]);
 
   const fetchEffect = useCallback(async () => {
     try {
-      const e = await api.getCurrentEffect();
-      setCurrentEffect(e);
-    } catch {
+      setCurrentEffect(await api.getCurrentEffect());
+    } catch (e) {
+      handleAuthError(e);
       setCurrentEffect(null);
     }
-  }, []);
+  }, [handleAuthError]);
 
-  useEffect(() => {
-    Promise.all([
-      api.getEffects().then((list) => {
-        setEffects(list);
-        // Default selection: first effect
-        setSelectedEffect((prev) => prev ?? list[0]?.name ?? null);
-      }).catch(() => {}),
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    await Promise.all([
+      api.getEffects()
+        .then((list) => {
+          setEffects(list);
+          // Default selection: first effect
+          setSelectedEffect((prev) => prev ?? list[0]?.name ?? null);
+        })
+        .catch(handleAuthError),
       fetchStatus(),
       fetchEffect(),
-    ]).finally(() => setLoading(false));
-  }, [fetchStatus, fetchEffect]);
+    ]);
+    setLoading(false);
+  }, [fetchStatus, fetchEffect, handleAuthError]);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
 
   useEffect(() => {
     const id = setInterval(fetchStatus, 5000);
@@ -88,6 +103,11 @@ export default function App() {
     } catch {
       alert("Failed to activate imported effect.");
     }
+  };
+
+  const handleKeySaved = () => {
+    setAuthRequired(false);
+    void loadAll();
   };
 
   const selectedEffectDef = effects.find((e) => e.name === selectedEffect) ?? null;
@@ -147,6 +167,7 @@ export default function App() {
       </AppShell>
 
       <SettingsDrawer opened={settingsOpened} onClose={closeSettings} />
+      <ApiKeyModal opened={authRequired} onSaved={handleKeySaved} />
     </>
   );
 }

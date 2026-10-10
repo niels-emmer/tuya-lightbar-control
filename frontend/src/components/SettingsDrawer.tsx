@@ -15,6 +15,7 @@ import {
 import { useMantineColorScheme, useComputedColorScheme } from "@mantine/core";
 import { IconCheck, IconInfoCircle } from "@tabler/icons-react";
 import { api, type AppSettings } from "../api";
+import { getApiKey, setApiKey as persistApiKey } from "../auth";
 
 interface Props {
   opened: boolean;
@@ -25,8 +26,8 @@ const DEFAULT: AppSettings = {
   brightness: 80,
   auto_on: null,
   auto_off: null,
-  weather_lat: 52.92,
-  weather_lon: 6.43,
+  weather_lat: 52.37,
+  weather_lon: 4.89,
 };
 
 export function SettingsDrawer({ opened, onClose }: Props) {
@@ -37,6 +38,8 @@ export function SettingsDrawer({ opened, onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [apiKeyDraft, setApiKeyDraft] = useState(getApiKey());
+  const [keySaved, setKeySaved] = useState(false);
 
   useEffect(() => {
     if (opened) {
@@ -131,6 +134,29 @@ export function SettingsDrawer({ opened, onClose }: Props) {
             step={0.01}
           />
         </Group>
+
+        <Divider label="API key (this browser)" labelPosition="left" />
+        <TextInput
+          label="API key"
+          placeholder="leave empty if the API is open"
+          type="password"
+          value={apiKeyDraft}
+          onChange={(e) => setApiKeyDraft(e.currentTarget.value)}
+          description="Stored in this browser only; sent as X-API-Key. Reload after changing."
+        />
+        <Button
+          size="xs"
+          variant="light"
+          color={keySaved ? "green" : "brand"}
+          leftSection={keySaved ? <IconCheck size={14} /> : undefined}
+          onClick={() => {
+            persistApiKey(apiKeyDraft.trim());
+            setKeySaved(true);
+            setTimeout(() => setKeySaved(false), 2000);
+          }}
+        >
+          {keySaved ? "Saved" : "Save API key"}
+        </Button>
 
         {error && (
           <Alert color="red" icon={<IconInfoCircle size={16} />}>{error}</Alert>
