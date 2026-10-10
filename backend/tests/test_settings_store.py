@@ -44,3 +44,19 @@ def test_weather_returns_floats(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     lat, lon = settings_store.weather()
     assert isinstance(lat, float) and isinstance(lon, float)
+
+
+def test_save_falls_back_when_rename_fails(tmp_path, monkeypatch):
+    # Simulate a single-file bind mount, where rename() onto the mount point
+    # fails with EBUSY (this is the documented Docker deployment).
+    import pathlib
+
+    target = _isolate(tmp_path, monkeypatch)
+
+    def _ebusy(self, other):
+        raise OSError(16, "Device or resource busy")
+
+    monkeypatch.setattr(pathlib.Path, "replace", _ebusy)
+    settings_store.save({"brightness": 33})
+    assert target.exists()
+    assert settings_store.load()["brightness"] == 33

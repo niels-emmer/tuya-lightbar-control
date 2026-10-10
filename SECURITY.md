@@ -25,8 +25,8 @@ either header:
 | `X-API-Key` | `X-API-Key: <key>` |
 | `Authorization` (Bearer) | `Authorization: Bearer <key>` |
 
-The key is compared in constant time (`hmac.compare_digest`). Requests without a
-valid key receive `401 Unauthorized`.
+The key is compared in constant time (`hmac.compare_digest` over the UTF-8
+bytes). Requests without a valid key receive `401 Unauthorized`.
 
 `GET /healthz` is **always unauthenticated** — it is a liveness probe used by the
 container healthcheck and returns no device data.
@@ -55,11 +55,12 @@ Protected by the API key (when set):
 Not protected:
 
 - `GET /healthz` — intentionally open liveness probe, no device data.
-- **The bundled web UI does not itself send the key.** The frontend's fetch
-  client issues plain `/api/*` requests. If you enable `API_KEY`, the UI's own
-  API calls will receive `401` unless you add key handling in the frontend or put
-  it behind a reverse proxy that injects the header. Enabling the key is aimed at
-  API clients (Home Assistant, scripts); plan for the UI separately.
+- The bundled web UI **does** send the key: it stores it in the browser's
+  `localStorage` (key `lightbar-api-key`) and sends it as `X-API-Key`, prompting
+  for it on a `401`. The key is read at runtime, never baked into the JS bundle.
+  Because it lives in `localStorage` and the app is served over plain HTTP on the
+  LAN, it is readable by any script on the origin — serve behind HTTPS (and a
+  strict CSP) if that matters to you.
 - The device's own LAN protocol (Tuya port 6668) is untouched by this app's auth.
 - Traffic between this app and third-party data sources (Binance, Open-Meteo,
   Truth Social) is outbound HTTPS and outside this project's control.

@@ -37,6 +37,19 @@ def _extract_key(request: Request) -> str | None:
     return None
 
 
+def _keys_match(provided: str, expected: str) -> bool:
+    """Constant-time key comparison that tolerates non-ASCII header values.
+
+    ``hmac.compare_digest`` raises ``TypeError`` on non-ASCII ``str`` input;
+    header values are latin-1 decoded, so a hostile header must not turn into
+    an unhandled 500.
+    """
+    try:
+        return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _is_protected(path: str) -> bool:
     return path in _PROTECTED_EXACT or any(
         path.startswith(prefix) for prefix in _PROTECTED_PREFIXES
@@ -56,7 +69,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         if _is_protected(request.url.path):
             provided = _extract_key(request)
-            if not provided or not hmac.compare_digest(provided, self._api_key):
+            if not provided or not _keys_match(provided, self._api_key):
                 logger.warning(
                     "Rejected unauthenticated request: %s %s",
                     request.method,

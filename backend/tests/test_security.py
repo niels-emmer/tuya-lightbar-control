@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
-from auth import ApiKeyMiddleware
+from auth import ApiKeyMiddleware, _keys_match
 
 
 def _client(api_key: str) -> TestClient:
@@ -50,6 +50,20 @@ class TestApiKeyAuth:
 
     def test_empty_key_disables_auth(self):
         assert _client("").get("/api/status").status_code == 200
+
+
+class TestKeysMatch:
+    """hmac.compare_digest raises on non-ASCII str — the guard must not."""
+
+    def test_equal(self):
+        assert _keys_match("s3cret", "s3cret") is True
+
+    def test_different(self):
+        assert _keys_match("nope", "s3cret") is False
+
+    def test_non_ascii_degrades_to_false(self):
+        assert _keys_match("caf\u00e9", "s3cret") is False
+        assert _keys_match("s3cret", "caf\u00e9") is False
 
 
 class TestSpaTraversal:

@@ -93,8 +93,12 @@ docker compose up -d --build      # API on host port 8042
 - **`API_KEY` unset ⇒ open API.** Auth is disabled when `API_KEY` is empty (with
   a startup warning). Remember this when reasoning about "is this route
   protected".
-- **The frontend does not send the API key.** `frontend/src/api.ts` issues plain
-  `/api/*` requests. Enabling `API_KEY` breaks the bundled UI's calls unless you
-  add key handling.
+- **The frontend sends the API key** from `localStorage`
+  (`frontend/src/auth.ts` → `X-API-Key`) and prompts for it on a `401`. To force
+  the prompt again, clear the `lightbar-api-key` entry from the browser's
+  localStorage.
+- **`settings.json` is a single-file bind mount.** `settings_store.save()`
+  prefers an atomic tmp+rename but falls back to an in-place write, because
+  renaming onto a bind-mounted file fails with `EBUSY`. Don't drop that fallback.
 - **Frontend lockfile is committed** (`frontend/package-lock.json`); CI uses
   `npm ci`. Keep it in sync when changing `package.json`.

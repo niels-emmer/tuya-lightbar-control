@@ -33,10 +33,20 @@ def load() -> dict[str, Any]:
 
 def save(partial: dict[str, Any]) -> dict[str, Any]:
     merged = {**load(), **partial}
-    # Write atomically so a crash mid-write cannot truncate settings.json.
+    payload = json.dumps(merged, indent=2)
+    # Prefer an atomic write (tmp + rename). But when settings.json is a
+    # single-file bind mount (the documented Docker deploy) renaming onto the
+    # mount point fails with EBUSY, so fall back to a direct in-place write.
     tmp = _SETTINGS_FILE.parent / (_SETTINGS_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(merged, indent=2))
-    tmp.replace(_SETTINGS_FILE)
+    try:
+        tmp.write_text(payload)
+        tmp.replace(_SETTINGS_FILE)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        _SETTINGS_FILE.write_text(payload)
     return merged
 
 
