@@ -9,3 +9,9 @@ frontend/dist/
 
 # Runtime / secrets
 .env
+
+# tinytuya scan/wizard artifacts (contain local keys for ALL paired devices)
+backend/devices.json
+backend/tuya-raw.json
+backend/snapshot.json
+backend/tinytuya.json

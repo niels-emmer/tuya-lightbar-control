@@ -9,6 +9,7 @@ from .countdown import CountdownEffect
 from .patterns import RandomEffect
 from .trumps_truths import TrumpsTruthsEffect
 from .network_traffic import NetworkTrafficEffect
+from .claude_usage import ClaudeUsageEffect
 
 _EFFECTS: list[BaseEffect] = [
     CryptoEffect(),
@@ -17,6 +18,7 @@ _EFFECTS: list[BaseEffect] = [
     RandomEffect(),
     TrumpsTruthsEffect(),
     NetworkTrafficEffect(),
+    ClaudeUsageEffect(),
 ]
 
 _BY_NAME: dict[str, BaseEffect] = {e.name: e for e in _EFFECTS}

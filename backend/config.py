@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     weather_lat: float = 52.37
     weather_lon: float = 4.89
 
+    # nanoclaw-cyd-monitor daemon (~/nanoclaw-monitor) — serves Claude Pro
+    # session/weekly rate-limit usage. No auth token: LAN-open by default.
+    claude_usage_url: str = "http://127.0.0.1:8787/usage"
+
 
 @lru_cache
 def get_settings() -> Settings:
