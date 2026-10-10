@@ -12,17 +12,18 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import settings_store
+from auth import ApiKeyMiddleware
 from config import get_settings
 from effect_runner import EffectRunner
 from effects.registry import list_effects
 from lightbar import LightbarDriver, tuya_to_hsv
 from models import (
+    HSV,
     AppSettings,
     ColorRequest,
     DeviceStatus,
     EffectActivateRequest,
     EffectState,
-    HSV,
     PowerRequest,
     SceneRequest,
     SegmentsRequest,
@@ -40,10 +41,12 @@ async def lifespan(app: FastAPI):
     global _driver
     cfg = get_settings()
 
-    # Seed settings.json from .env on first run
-    stored = settings_store.load()
-    if stored.get("weather_lat") == 52.92 and cfg.weather_lat != 52.92:
-        settings_store.save({"weather_lat": cfg.weather_lat, "weather_lon": cfg.weather_lon})
+    # Seed settings.json from .env weather on first run (no settings.json yet).
+    # After that, settings.json is authoritative and editable from the UI.
+    if not settings_store.exists():
+        settings_store.save(
+            {"weather_lat": cfg.weather_lat, "weather_lon": cfg.weather_lon}
+        )
 
     if cfg.device_id and cfg.device_ip and cfg.device_key:
         _driver = LightbarDriver(
@@ -69,11 +72,13 @@ async def _auto_onoff_loop():
             s = settings_store.load()
             now = datetime.now().strftime("%H:%M")
             if _driver:
+                # set_power blocks (and holds the device lock) — keep it off the
+                # event loop.
                 if s.get("auto_on") == now:
-                    _driver.set_power(True)
+                    await asyncio.to_thread(_driver.set_power, True)
                 if s.get("auto_off") == now:
                     await _runner.stop()
-                    _driver.set_power(False)
+                    await asyncio.to_thread(_driver.set_power, False)
         except Exception as e:
             logger.warning(f"auto_onoff_loop error: {e}")
         await asyncio.sleep(30)
@@ -83,7 +88,8 @@ app = FastAPI(
     title="Lightbar Monitor",
     description=(
         "REST API for controlling the Battletron RGB lightbar (Tuya v3.5 LAN). "
-        "Low-level device routes are stable and safe to call from Home Assistant or any external app. "
+        "Low-level device routes are stable and safe to call from Home Assistant "
+        "or any external app. "
         "Effect routes run an async loop that continuously pushes patterns to the device; "
         "only one effect can be active at a time."
     ),
@@ -91,11 +97,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Shared-secret auth on /api/* and the docs routes. With no key configured,
+# auth is disabled (local dev / trusted LAN) — warn loudly so it is not left
+# open by accident in production.
+app.add_middleware(ApiKeyMiddleware, api_key=get_settings().api_key)
+if not get_settings().api_key:
+    logger.warning(
+        "API_KEY is not set — the API is UNAUTHENTICATED. Set API_KEY in .env "
+        "before exposing this service beyond a trusted host."
+    )
+
 
 def _require_driver() -> LightbarDriver:
     if _driver is None:
         raise HTTPException(status_code=503, detail="Device not configured")
     return _driver
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    """Unauthenticated liveness probe for container healthchecks."""
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +129,10 @@ def _require_driver() -> LightbarDriver:
     response_model=DeviceStatus,
     tags=["Device"],
     summary="Get device status",
-    description="Returns whether the lightbar is reachable, its power state, current mode, and whole-bar HSV color.",
+    description=(
+        "Returns whether the lightbar is reachable, its power state, current "
+        "mode, and whole-bar HSV color."
+    ),
 )
 def get_status():
     if _driver is None:
@@ -144,7 +169,10 @@ def set_power(req: PowerRequest):
     "/api/color",
     tags=["Device"],
     summary="Set whole-bar color",
-    description="Sets all 20 segments to the same HSV color instantly via DP 24. Stops any running effect.",
+    description=(
+        "Sets all 20 segments to the same HSV color instantly via DP 24. "
+        "Stops any running effect."
+    ),
 )
 def set_color(req: ColorRequest):
     d = _require_driver()
@@ -191,7 +219,8 @@ def set_segment_off(n: int):
     summary="Set all segments in one sweep",
     description=(
         "Writes up to 20 HSV values (index 0 = segment 1) in a single persistent connection. "
-        "Pass `null` for a segment to turn it off. A full 20-segment sweep takes ~5 s at 0.25 s/segment. "
+        "Pass `null` for a segment to turn it off. A full 20-segment sweep takes "
+        "~5 s at 0.25 s/segment. "
         "This is the primary route for data-driven patterns."
     ),
 )
@@ -229,7 +258,8 @@ def set_scene(req: SceneRequest):
     tags=["Effects"],
     summary="List available effects",
     description=(
-        "Returns all registered effects with their name, label, description, and parameter schemas. "
+        "Returns all registered effects with their name, label, description, "
+        "and parameter schemas. "
         "Use the `name` field with `POST /api/effect` to activate an effect."
     ),
 )
@@ -242,7 +272,10 @@ def get_effects():
     response_model=Optional[EffectState],
     tags=["Effects"],
     summary="Get active effect",
-    description="Returns the currently running effect and its parameters, or null if none is active.",
+    description=(
+        "Returns the currently running effect and its parameters, "
+        "or null if none is active."
+    ),
 )
 def get_current_effect():
     c = _runner.current
@@ -320,16 +353,20 @@ def update_settings(req: AppSettings):
 # Serve frontend (production build)
 # ---------------------------------------------------------------------------
 
-_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+_DIST = (Path(__file__).parent.parent / "frontend" / "dist").resolve()
 
 if _DIST.exists():
-    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+    _ASSETS = _DIST / "assets"
+    if _ASSETS.is_dir():
+        app.mount("/assets", StaticFiles(directory=_ASSETS), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str):
-        file = _DIST / full_path
-        if file.is_file():
-            return FileResponse(file)
+        # Resolve and confine to _DIST — prevents path traversal
+        # (e.g. GET /../../.env) from escaping the static directory.
+        candidate = (_DIST / full_path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(_DIST):
+            return FileResponse(candidate)
         return FileResponse(_DIST / "index.html")
 else:
     @app.get("/", include_in_schema=False)

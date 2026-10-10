@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -50,8 +51,8 @@ class AppSettings(BaseModel):
     brightness: int = Field(80, ge=0, le=100)
     auto_on: Optional[str] = Field(None, description="HH:MM or null")
     auto_off: Optional[str] = Field(None, description="HH:MM or null")
-    weather_lat: float = 52.92
-    weather_lon: float = 6.43
+    weather_lat: float = 52.37
+    weather_lon: float = 4.89
 
 
 # ── Effects ─────────────────────────────────────────────────────────────────

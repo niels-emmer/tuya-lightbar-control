@@ -7,6 +7,7 @@ from typing import Optional
 
 import aiohttp
 
+from ._params import as_choice
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ class ClaudeUsageEffect(BaseEffect):
     ]
 
     async def run(self, driver, brightness: int, params: dict) -> None:
-        mode = str(params.get("mode", "session"))
+        mode = as_choice(params, "mode", "session", ("session", "weekly", "alternate"))
         loop = asyncio.get_running_loop()
 
         session_pct: Optional[float] = None

@@ -1,3 +1,5 @@
+import { getApiKey } from "./auth";
+
 export interface DeviceStatus {
   online: boolean;
   power: boolean | null;
@@ -38,17 +40,32 @@ export interface AppSettings {
   weather_lon: number;
 }
 
-async function request<T>(
-  path: string,
-  options?: RequestInit
-): Promise<T> {
+/** Error carrying the HTTP status, so callers can detect 401 (auth). */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const key = getApiKey();
+  if (key) headers["X-API-Key"] = key;
+
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
   });
+
+  if (res.status === 401) {
+    throw new ApiError(401, "Unauthorized — an API key is required");
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(text);
+    throw new ApiError(res.status, text);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;

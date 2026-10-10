@@ -3,16 +3,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Optional
 
 import aiohttp
 
+from ._params import as_float
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
 
 _WS_BASE = "wss://stream.binance.com:9443/stream"
 _NSEG = 20
+# Binance stream symbols are alphanumeric pairs, e.g. BTCUSDT.
+_COIN_RE = re.compile(r"^[A-Z0-9]{4,20}$")
 _CENTER_DEFAULT = 9  # 0-indexed; segment 10 in 1-indexed
 
 
@@ -48,7 +52,10 @@ class CryptoEffect(BaseEffect):
 
     async def run(self, driver, brightness: int, params: dict) -> None:
         coin = str(params.get("coin", "BTCUSDT")).upper().strip()
-        max_pct = float(params.get("max_pct", 0.3))
+        if not _COIN_RE.match(coin):
+            logger.warning(f"Crypto: invalid coin pair {coin!r} — falling back to BTCUSDT")
+            coin = "BTCUSDT"
+        max_pct = as_float(params, "max_pct", 0.3, 0.05, 20)
         loop = asyncio.get_running_loop()
 
         coin_lower = coin.lower()

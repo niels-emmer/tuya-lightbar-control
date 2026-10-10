@@ -119,12 +119,12 @@ export function EffectCard({ effect, activeEffect, onEffectChange, paramOverride
         </Group>
 
         {/* Collapsible API sample */}
-        <Collapse in={apiOpen}>
+        <Collapse expanded={apiOpen}>
           <Stack gap={6}>
             <Group justify="space-between">
               <Text size="xs" c="dimmed" fw={500}>POST /api/effect</Text>
               <Anchor
-                href="http://localhost:8000/docs#/effects/activate_effect_api_effect_post"
+                href="/docs#/effects/activate_effect_api_effect_post"
                 target="_blank"
                 size="xs"
               >

@@ -6,6 +6,7 @@ from typing import Optional
 
 import paho.mqtt.client as mqtt
 
+from ._params import as_float
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ class HomePowerEffect(BaseEffect):
         from config import get_settings
 
         cfg = get_settings()
-        max_w = float(params.get("max_w", 3000))
+        max_w = as_float(params, "max_w", 3000, 100, 20000)
         topic = cfg.mqtt_topic
         loop = asyncio.get_running_loop()
 
