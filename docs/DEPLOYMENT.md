@@ -48,7 +48,20 @@ office-pc
    missing Docker will create a directory in its place and the app will fail to
    write settings. Copy the example first.
 
-3. **Build and start:**
+3. **Match the container user to the `settings.json` owner.** The container runs
+   as a non-root user whose uid/gid default to 1000. The bind-mounted
+   `settings.json` must be writable by that user, so if your deploy user is not
+   uid 1000, add its ids to `.env`:
+
+   ```bash
+   printf 'APP_UID=%s\nAPP_GID=%s\n' "$(id -u)" "$(id -g)" >> .env
+   ```
+
+   On `office-pc` the user `niels` is uid/gid `1003`, so `APP_UID=1003` /
+   `APP_GID=1003` are set. If these do not match the file owner,
+   `PUT /api/settings` fails with `PermissionError`.
+
+4. **Build and start:**
 
    ```bash
    docker compose up -d --build
