@@ -1,5 +1,5 @@
 # ── Stage 1: build the React frontend ──────────────────────────────────────
-FROM node:22-slim-bookworm AS frontend-builder
+FROM node:22-bookworm-slim AS frontend-builder
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
