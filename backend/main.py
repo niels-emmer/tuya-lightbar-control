@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import settings_store
+from auth import ApiKeyMiddleware
 from config import get_settings
 from effect_runner import EffectRunner
 from effects.registry import list_effects
@@ -91,11 +92,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Shared-secret auth on /api/* and the docs routes. With no key configured,
+# auth is disabled (local dev / trusted LAN) — warn loudly so it is not left
+# open by accident in production.
+app.add_middleware(ApiKeyMiddleware, api_key=get_settings().api_key)
+if not get_settings().api_key:
+    logger.warning(
+        "API_KEY is not set — the API is UNAUTHENTICATED. Set API_KEY in .env "
+        "before exposing this service beyond a trusted host."
+    )
+
 
 def _require_driver() -> LightbarDriver:
     if _driver is None:
         raise HTTPException(status_code=503, detail="Device not configured")
     return _driver
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    """Unauthenticated liveness probe for container healthchecks."""
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -320,16 +337,18 @@ def update_settings(req: AppSettings):
 # Serve frontend (production build)
 # ---------------------------------------------------------------------------
 
-_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+_DIST = (Path(__file__).parent.parent / "frontend" / "dist").resolve()
 
 if _DIST.exists():
     app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str):
-        file = _DIST / full_path
-        if file.is_file():
-            return FileResponse(file)
+        # Resolve and confine to _DIST — prevents path traversal
+        # (e.g. GET /../../.env) from escaping the static directory.
+        candidate = (_DIST / full_path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(_DIST):
+            return FileResponse(candidate)
         return FileResponse(_DIST / "index.html")
 else:
     @app.get("/", include_in_schema=False)
