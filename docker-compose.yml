@@ -1,6 +1,13 @@
 services:
   tuya-lightbar-control:
-    build: .
+    build:
+      context: .
+      # Match the container user to the owner of the bind-mounted
+      # settings.json so it stays writable. If the deploy user is not uid 1000,
+      # set APP_UID/APP_GID in .env to its `id -u` / `id -g`.
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
     restart: unless-stopped
     env_file: .env
     ports:
