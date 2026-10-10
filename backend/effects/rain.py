@@ -6,6 +6,8 @@ from typing import Optional
 
 import aiohttp
 
+import settings_store
+from ._params import as_int
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
@@ -36,7 +38,7 @@ class RainEffect(BaseEffect):
     ]
 
     async def run(self, driver, brightness: int, params: dict) -> None:
-        window = int(params.get("window", 30))
+        window = as_int(params, "window", 30, 15, 60)
         loop = asyncio.get_running_loop()
 
         while True:
@@ -53,10 +55,7 @@ class RainEffect(BaseEffect):
             await asyncio.sleep(300)  # 5 minutes
 
     async def _fetch_probability(self, window_minutes: int, driver) -> float:
-        from config import get_settings
-        cfg = get_settings()
-        lat = cfg.weather_lat
-        lon = cfg.weather_lon
+        lat, lon = settings_store.weather()
 
         url = (
             f"{_OPEN_METEO}?latitude={lat}&longitude={lon}"

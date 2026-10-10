@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from ._params import as_float, as_str
 from .base import BaseEffect, ParamSchema
 
 # Try host-mounted /proc/net first (Docker with bridge networking),
@@ -105,8 +106,8 @@ class NetworkTrafficEffect(BaseEffect):
     ]
 
     async def run(self, driver: Any, brightness: int, params: dict) -> None:
-        iface_req = str(params.get("interface", "")).strip()
-        max_bps = float(params.get("max_mbps", 100)) * 1_000_000 / 8
+        iface_req = as_str(params, "interface")
+        max_bps = as_float(params, "max_mbps", 100, 1, 10000) * 1_000_000 / 8
         loop = asyncio.get_running_loop()
         proc_path = _find_proc_path()
 

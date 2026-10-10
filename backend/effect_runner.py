@@ -24,7 +24,8 @@ class EffectRunner:
             raise ValueError(f"Unknown effect: {name!r}")
 
         await self.stop()
-        driver.set_power(True)
+        # set_power blocks on the device socket — keep it off the event loop.
+        await asyncio.to_thread(driver.set_power, True)
         self._current = {"name": name, "params": params}
         self._task = asyncio.create_task(self._run(effect, driver, params, brightness))
 

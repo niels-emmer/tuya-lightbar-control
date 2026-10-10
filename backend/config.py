@@ -18,9 +18,11 @@ class Settings(BaseSettings):
     device_key: str = ""
     device_version: float = 3.5
 
-    # Weather location — used by the rain and air_quality effects.
-    weather_lat: float = 52.37
-    weather_lon: float = 4.89
+    # Weather location — first-run seed for settings.json only. After the first
+    # start the UI-editable settings.json is authoritative for the rain and
+    # air_quality effects (see settings_store.weather()).
+    weather_lat: float = 52.92
+    weather_lon: float = 6.43
 
     # nanoclaw-cyd-monitor daemon (~/nanoclaw-monitor) — serves Claude Pro
     # session/weekly rate-limit usage. No auth token: LAN-open by default.

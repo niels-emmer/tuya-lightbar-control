@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import base64
-import threading
 import logging
+import threading
+import time
+from contextlib import contextmanager
+from typing import Iterator, Optional
 
 import tinytuya
 
 logger = logging.getLogger(__name__)
+
+# DP 61 payload layout (13 bytes, base64-encoded):
+#   [0x00][0x01][0x00][0x14=20segs][mode][H hi][H lo][S hi][S lo][V hi][V lo][0x81][seg]
+# mode 0x01 = solid colour ON, 0x02 = segment off.
+_SEGMENT_COUNT = 20
 
 
 def hsv_to_tuya(h: float, s: float, v: float) -> str:
@@ -32,8 +40,40 @@ def tuya_to_hsv(hex_str: str) -> tuple[float, float, float]:
     return float(hh), ss / 10.0, vv / 10.0
 
 
+def _segment_payload(segment: int, color: Optional[tuple[float, float, float]]) -> str:
+    """Build the base64-encoded DP 61 payload for one segment.
+
+    ``color`` is an (h, s, v) tuple, or ``None`` to turn the segment off.
+    """
+    seg = max(1, min(_SEGMENT_COUNT, int(segment)))
+    if color is None:
+        data = bytes([
+            0x00, 0x01, 0x00, 0x14, 0x02,   # header + mode: OFF
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  # h, s, v = 0
+            0x81, seg,
+        ])
+    else:
+        h, s, v = color
+        hh = int(max(0, min(360, h)))
+        ss = int(max(0, min(1000, s * 10)))
+        vv = int(max(0, min(1000, v * 10)))
+        data = bytes([
+            0x00, 0x01, 0x00, 0x14, 0x01,   # header + mode: solid colour ON
+            (hh >> 8) & 0xFF, hh & 0xFF,    # hue   big-endian uint16
+            (ss >> 8) & 0xFF, ss & 0xFF,    # sat   big-endian uint16
+            (vv >> 8) & 0xFF, vv & 0xFF,    # val   big-endian uint16
+            0x81, seg,
+        ])
+    return base64.b64encode(data).decode()
+
+
 class LightbarDriver:
-    """Thread-safe wrapper around tinytuya BulbDevice."""
+    """Thread-safe wrapper around tinytuya BulbDevice.
+
+    Each operation opens a short-lived connection and always closes it; the
+    device only tolerates one in-flight command at a time, so all access is
+    serialised through a lock.
+    """
 
     def __init__(self, device_id: str, ip: str, local_key: str, version: float = 3.5):
         self._device_id = device_id
@@ -55,15 +95,26 @@ class LightbarDriver:
         d.set_socketRetryLimit(1)
         return d
 
+    @contextmanager
+    def _session(self) -> Iterator[tinytuya.BulbDevice]:
+        """Open a device connection and always close its socket afterwards."""
+        d = self._connect()
+        try:
+            yield d
+        finally:
+            try:
+                d.close()
+            except Exception:
+                pass
+
     def set_color(self, h: float, s: float, v: float) -> bool:
-        """Set HSV color. Returns True on success."""
+        """Set whole-bar HSV colour (DP 24). Returns True on success."""
         hex_val = hsv_to_tuya(h, s, v)
         with self._lock:
             try:
-                d = self._connect()
-                # Ensure colour mode
-                d.set_value(21, "colour")
-                d.set_value(24, hex_val)
+                with self._session() as d:
+                    d.set_value(21, "colour")  # ensure colour mode
+                    d.set_value(24, hex_val)
                 self._online = True
                 return True
             except Exception as e:
@@ -74,8 +125,8 @@ class LightbarDriver:
     def set_power(self, on: bool) -> bool:
         with self._lock:
             try:
-                d = self._connect()
-                d.set_value(20, on)
+                with self._session() as d:
+                    d.set_value(20, on)
                 self._online = True
                 return True
             except Exception as e:
@@ -84,7 +135,7 @@ class LightbarDriver:
                 return False
 
     def set_scene(self, scene_type: int, speed: int, colors: list[tuple[int, int, int]]) -> bool:
-        """Send a hardware scene to DP51.
+        """Send a hardware scene to DP 51.
 
         scene_type: 0=static, 1=gradient/flow, 2=flash, 3=wave
         speed: 0-100
@@ -96,9 +147,9 @@ class LightbarDriver:
         payload = base64.b64encode(data).decode()
         with self._lock:
             try:
-                d = self._connect()
-                d.set_value(21, "scene")
-                d.set_value(51, payload)
+                with self._session() as d:
+                    d.set_value(21, "scene")
+                    d.set_value(51, payload)
                 self._online = True
                 return True
             except Exception as e:
@@ -109,40 +160,15 @@ class LightbarDriver:
     def set_segment(self, segment: int, h: float, s: float, v: float) -> bool:
         """Set a single LED segment to an HSV colour via DP 61.
 
-        The lightbar has 20 segments indexed 1–20 (left to right).
-        Each call targets exactly one segment; other segments are unaffected.
-
-        Args:
-            segment: 1–20
-            h: hue 0–360 (raw degrees, same scale as DP 24)
-            s: saturation 0–100  (internally scaled ×10 → 0–1000)
-            v: value/brightness 0–100  (internally scaled ×10 → 0–1000)
-
-        Protocol (DP 61, 13-byte payload, base64-encoded):
-            [0x00][0x01][0x00][0x14=20segs][mode=0x01]
-            [H hi][H lo][S hi][S lo][V hi][V lo]
-            [0x81][segment index 1-based]
+        The lightbar has 20 segments indexed 1–20 (left to right). Each call
+        targets exactly one segment; other segments are unaffected.
         """
-        import base64 as _b64
-        seg = max(1, min(20, int(segment)))
-        hh = int(max(0, min(360, h)))
-        ss = int(max(0, min(1000, s * 10)))
-        vv = int(max(0, min(1000, v * 10)))
-        data = bytes([
-            0x00, 0x01, 0x00, 0x14,          # header: reserved, on, reserved, 20 segments
-            0x01,                             # mode: solid colour ON
-            (hh >> 8) & 0xFF, hh & 0xFF,     # hue   big-endian uint16
-            (ss >> 8) & 0xFF, ss & 0xFF,      # sat   big-endian uint16
-            (vv >> 8) & 0xFF, vv & 0xFF,      # val   big-endian uint16
-            0x81,                             # unknown flag — always 0x81
-            seg,                              # segment index 1–20
-        ])
-        payload = _b64.b64encode(data).decode()
+        payload = _segment_payload(segment, (h, s, v))
         with self._lock:
             try:
-                d = self._connect()
-                d.set_value(21, "colour")
-                d.set_value(61, payload)
+                with self._session() as d:
+                    d.set_value(21, "colour")
+                    d.set_value(61, payload)
                 self._online = True
                 return True
             except Exception as e:
@@ -151,28 +177,13 @@ class LightbarDriver:
                 return False
 
     def set_segment_off(self, segment: int) -> bool:
-        """Turn off a single LED segment (DP 61, mode=0x02, colour zeroed).
-
-        Args:
-            segment: 1–20
-        """
-        import base64 as _b64
-        seg = max(1, min(20, int(segment)))
-        data = bytes([
-            0x00, 0x01, 0x00, 0x14,  # header
-            0x02,                    # mode: OFF
-            0x00, 0x00,              # hue   = 0
-            0x00, 0x00,              # sat   = 0
-            0x00, 0x00,              # val   = 0
-            0x81,                    # unknown flag
-            seg,                     # segment index 1–20
-        ])
-        payload = _b64.b64encode(data).decode()
+        """Turn off a single LED segment (DP 61, mode=0x02, colour zeroed)."""
+        payload = _segment_payload(segment, None)
         with self._lock:
             try:
-                d = self._connect()
-                d.set_value(21, "colour")
-                d.set_value(61, payload)
+                with self._session() as d:
+                    d.set_value(21, "colour")
+                    d.set_value(61, payload)
                 self._online = True
                 return True
             except Exception as e:
@@ -200,49 +211,27 @@ class LightbarDriver:
 
         Returns True if all writes succeeded.
         """
-        import base64 as _b64
-        import time as _time
-
-        def _make_payload(seg: int, entry) -> str:
-            if entry is None:
-                data = bytes([0x00, 0x01, 0x00, 0x14, 0x02,
-                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                               0x81, seg])
-            else:
-                h, s, v = entry
-                hh = int(max(0, min(360, h)))
-                ss = int(max(0, min(1000, s * 10)))
-                vv = int(max(0, min(1000, v * 10)))
-                data = bytes([
-                    0x00, 0x01, 0x00, 0x14, 0x01,
-                    (hh >> 8) & 0xFF, hh & 0xFF,
-                    (ss >> 8) & 0xFF, ss & 0xFF,
-                    (vv >> 8) & 0xFF, vv & 0xFF,
-                    0x81, seg,
-                ])
-            return _b64.b64encode(data).decode()
-
         with self._lock:
             try:
-                d = self._connect()
-                d.set_value(21, "colour")
-                ok = True
-                for i, entry in enumerate(colors[:20]):
-                    seg = i + 1
-                    payload = _make_payload(seg, entry)
-                    result = d.set_value(61, payload)
-                    if isinstance(result, dict) and result.get("Error"):
-                        err_code = result.get("Err")
-                        if err_code == "904":
-                            # 904 = tinytuya received a device heartbeat where
-                            # it expected an ACK — the command was delivered,
-                            # this is a false alarm.
-                            logger.debug(f"set_all_segments seg {seg}: 904 ignored (heartbeat collision)")
-                        else:
-                            logger.warning(f"set_all_segments seg {seg} error: {result}")
-                            ok = False
-                    if i < len(colors) - 1:
-                        _time.sleep(segment_delay)
+                with self._session() as d:
+                    d.set_value(21, "colour")
+                    ok = True
+                    for i, entry in enumerate(colors[:_SEGMENT_COUNT]):
+                        seg = i + 1
+                        result = d.set_value(61, _segment_payload(seg, entry))
+                        if isinstance(result, dict) and result.get("Error"):
+                            if result.get("Err") == "904":
+                                # 904 = tinytuya received a device heartbeat where
+                                # it expected an ACK — the command was delivered,
+                                # this is a false alarm.
+                                logger.debug(
+                                    f"set_all_segments seg {seg}: 904 ignored (heartbeat collision)"
+                                )
+                            else:
+                                logger.warning(f"set_all_segments seg {seg} error: {result}")
+                                ok = False
+                        if i < len(colors) - 1:
+                            time.sleep(segment_delay)
                 self._online = True
                 return ok
             except Exception as e:
@@ -253,9 +242,10 @@ class LightbarDriver:
     def get_status(self) -> dict | None:
         with self._lock:
             try:
-                d = self._connect()
-                status = d.status()
+                with self._session() as d:
+                    status = d.status()
                 self._online = True
+                # tinytuya returns DP keys as strings; normalise to int.
                 return {int(k): v for k, v in status.get("dps", {}).items()}
             except Exception as e:
                 logger.warning(f"Lightbar get_status failed: {e}")

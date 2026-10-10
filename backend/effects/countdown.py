@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 
+from ._params import as_float
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ class CountdownEffect(BaseEffect):
     ]
 
     async def run(self, driver, brightness: int, params: dict) -> None:
-        minutes = float(params.get("minutes", 10))
+        minutes = as_float(params, "minutes", 10, 1, 120)
         total_seconds = minutes * 60
         start = time.monotonic()
         loop = asyncio.get_running_loop()

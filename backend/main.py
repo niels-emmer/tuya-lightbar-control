@@ -41,10 +41,12 @@ async def lifespan(app: FastAPI):
     global _driver
     cfg = get_settings()
 
-    # Seed settings.json from .env on first run
-    stored = settings_store.load()
-    if stored.get("weather_lat") == 52.92 and cfg.weather_lat != 52.92:
-        settings_store.save({"weather_lat": cfg.weather_lat, "weather_lon": cfg.weather_lon})
+    # Seed settings.json from .env weather on first run (no settings.json yet).
+    # After that, settings.json is authoritative and editable from the UI.
+    if not settings_store.exists():
+        settings_store.save(
+            {"weather_lat": cfg.weather_lat, "weather_lon": cfg.weather_lon}
+        )
 
     if cfg.device_id and cfg.device_ip and cfg.device_key:
         _driver = LightbarDriver(
@@ -70,11 +72,13 @@ async def _auto_onoff_loop():
             s = settings_store.load()
             now = datetime.now().strftime("%H:%M")
             if _driver:
+                # set_power blocks (and holds the device lock) — keep it off the
+                # event loop.
                 if s.get("auto_on") == now:
-                    _driver.set_power(True)
+                    await asyncio.to_thread(_driver.set_power, True)
                 if s.get("auto_off") == now:
                     await _runner.stop()
-                    _driver.set_power(False)
+                    await asyncio.to_thread(_driver.set_power, False)
         except Exception as e:
             logger.warning(f"auto_onoff_loop error: {e}")
         await asyncio.sleep(30)

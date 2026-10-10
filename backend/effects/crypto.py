@@ -8,6 +8,7 @@ from typing import Optional
 
 import aiohttp
 
+from ._params import as_float
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class CryptoEffect(BaseEffect):
         if not _COIN_RE.match(coin):
             logger.warning(f"Crypto: invalid coin pair {coin!r} — falling back to BTCUSDT")
             coin = "BTCUSDT"
-        max_pct = float(params.get("max_pct", 0.3))
+        max_pct = as_float(params, "max_pct", 0.3, 0.05, 20)
         loop = asyncio.get_running_loop()
 
         coin_lower = coin.lower()

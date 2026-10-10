@@ -4,6 +4,7 @@ import asyncio
 import math
 import logging
 
+from ._params import as_choice, as_int
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
@@ -64,10 +65,10 @@ class RandomEffect(BaseEffect):
     ]
 
     async def run(self, driver, brightness: int, params: dict) -> None:
-        style = params.get("style", "rainbow")
-        speed = params.get("speed", "medium")
-        color_mode = params.get("colors", "multi")
-        hue_param = int(params.get("hue", 200))
+        style = as_choice(params, "style", "rainbow", ("rainbow", "blobs", "dots", "pulse"))
+        speed = as_choice(params, "speed", "medium", ("slow", "medium", "fast"))
+        color_mode = as_choice(params, "colors", "multi", ("multi", "single"))
+        hue_param = as_int(params, "hue", 200, 0, 359)
         loop = asyncio.get_running_loop()
 
         if style == "pulse":

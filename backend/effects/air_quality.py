@@ -6,6 +6,8 @@ from typing import Optional
 
 import aiohttp
 
+import settings_store
+from ._params import as_choice
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
@@ -47,9 +49,7 @@ class AirQualityEffect(BaseEffect):
     ]
 
     async def run(self, driver, brightness: int, params: dict) -> None:
-        metric = str(params.get("metric", "aqi"))
-        if metric not in _SCALES:
-            metric = "aqi"
+        metric = as_choice(params, "metric", "aqi", tuple(_SCALES))
         loop = asyncio.get_running_loop()
 
         value: Optional[float] = None
@@ -76,11 +76,9 @@ class AirQualityEffect(BaseEffect):
             await asyncio.sleep(_REFRESH_INTERVAL)
 
     async def _fetch(self, metric: str) -> float:
-        from config import get_settings
-
-        cfg = get_settings()
+        lat, lon = settings_store.weather()
         url = (
-            f"{_AQ_URL}?latitude={cfg.weather_lat}&longitude={cfg.weather_lon}"
+            f"{_AQ_URL}?latitude={lat}&longitude={lon}"
             "&current=european_aqi,pm2_5&timezone=auto"
         )
         async with aiohttp.ClientSession() as session:

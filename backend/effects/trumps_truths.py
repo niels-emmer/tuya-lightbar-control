@@ -7,6 +7,7 @@ from typing import Optional
 
 import aiohttp
 
+from ._params import as_int
 from .base import BaseEffect, ParamSchema
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,8 @@ class TrumpsTruthsEffect(BaseEffect):
         self._account_id: Optional[str] = None
 
     async def run(self, driver, brightness: int, params: dict) -> None:
-        hours = int(params.get("hours", 24))
-        max_truths = int(params.get("max_truths", 20))
+        hours = as_int(params, "hours", 24, 1, 168)
+        max_truths = as_int(params, "max_truths", 20, 1, 100)
         loop = asyncio.get_running_loop()
 
         while True:
