@@ -11,7 +11,7 @@ RUN npm run build
 # ── Stage 2: Python runtime ─────────────────────────────────────────────────
 # Base images are pinned to explicit Debian variants. Pin to a digest
 # (image@sha256:...) in CI for full supply-chain reproducibility.
-FROM python:3.13-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
