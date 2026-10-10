@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # session/weekly rate-limit usage. No auth token: LAN-open by default.
     claude_usage_url: str = "http://127.0.0.1:8787/usage"
 
+    # MQTT broker — DSMR P1 smart-meter reader (daniel-jong/esp8266_p1meter).
+    # Publishes watts to sensors/power/p1meter/actual_consumption.
+    mqtt_host: str = "192.168.101.252"
+    mqtt_port: int = 1883
+    mqtt_topic: str = "sensors/power/p1meter/actual_consumption"
+
 
 @lru_cache
 def get_settings() -> Settings:

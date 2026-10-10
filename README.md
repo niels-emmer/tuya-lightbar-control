@@ -196,6 +196,7 @@ Effects are activated via `POST /api/effect` or from the frontend. Only one runs
 | **Trump's Truths** | `trumps_truths` | Live count of @realDonaldTrump posts on Truth Social in the past N hours. Green→red gradient. Refreshes every 5 min. Params: `hours`, `max_truths`. |
 | **Network Traffic** | `network_traffic` | Host RX/TX bandwidth on a split vertical bar. Bottom 9 segments = incoming (blue), top 9 = outgoing (green), center pulses white. Reads `/proc/net/dev`. Params: `interface`, `max_mbps`. |
 | **Air Quality** | `air_quality` | Severity bar for local air quality from Open-Meteo (your saved weather location). Fill grows with pollution; colour ramps green → yellow → orange → red. Tip pulses to show it is live. Refreshes every 10 min. Params: `metric` (`aqi` / `pm2_5`). |
+| **Home Power** | `home_power` | Live whole-home power draw (W) from a DSMR P1 smart-meter reader over MQTT (`sensors/power/p1meter/actual_consumption`). Bar fills with load, ramps green → red; near-real-time. Params: `max_w`. Config: `MQTT_HOST` / `MQTT_PORT` / `MQTT_TOPIC`. |
 
 > **Docker note:** The network_traffic effect requires a `/proc/net` volume mount (included in `docker-compose.yml`) to read host-level interface stats rather than the container's virtual eth0.
 
