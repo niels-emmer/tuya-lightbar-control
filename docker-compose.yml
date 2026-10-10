@@ -11,6 +11,24 @@ services:
       # Expose host network stats for the network_traffic effect.
       # Without this, the container only sees its own virtual interface.
       - /proc/net:/host_proc_net:ro
+    # Hardening: drop all capabilities and forbid privilege escalation.
+    # A read-only root filesystem is intentionally NOT set: settings.json is a
+    # single-file bind-mount the app writes in place, which a read-only root
+    # would break.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     # If the device is unreachable via bridge networking (e.g. running on a VPS),
     # switch to host networking so tinytuya can reach the LAN device directly:
     # network_mode: host
