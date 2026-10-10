@@ -18,12 +18,12 @@ from effect_runner import EffectRunner
 from effects.registry import list_effects
 from lightbar import LightbarDriver, tuya_to_hsv
 from models import (
+    HSV,
     AppSettings,
     ColorRequest,
     DeviceStatus,
     EffectActivateRequest,
     EffectState,
-    HSV,
     PowerRequest,
     SceneRequest,
     SegmentsRequest,
@@ -88,7 +88,8 @@ app = FastAPI(
     title="Lightbar Monitor",
     description=(
         "REST API for controlling the Battletron RGB lightbar (Tuya v3.5 LAN). "
-        "Low-level device routes are stable and safe to call from Home Assistant or any external app. "
+        "Low-level device routes are stable and safe to call from Home Assistant "
+        "or any external app. "
         "Effect routes run an async loop that continuously pushes patterns to the device; "
         "only one effect can be active at a time."
     ),
@@ -128,7 +129,10 @@ def healthz():
     response_model=DeviceStatus,
     tags=["Device"],
     summary="Get device status",
-    description="Returns whether the lightbar is reachable, its power state, current mode, and whole-bar HSV color.",
+    description=(
+        "Returns whether the lightbar is reachable, its power state, current "
+        "mode, and whole-bar HSV color."
+    ),
 )
 def get_status():
     if _driver is None:
@@ -165,7 +169,10 @@ def set_power(req: PowerRequest):
     "/api/color",
     tags=["Device"],
     summary="Set whole-bar color",
-    description="Sets all 20 segments to the same HSV color instantly via DP 24. Stops any running effect.",
+    description=(
+        "Sets all 20 segments to the same HSV color instantly via DP 24. "
+        "Stops any running effect."
+    ),
 )
 def set_color(req: ColorRequest):
     d = _require_driver()
@@ -212,7 +219,8 @@ def set_segment_off(n: int):
     summary="Set all segments in one sweep",
     description=(
         "Writes up to 20 HSV values (index 0 = segment 1) in a single persistent connection. "
-        "Pass `null` for a segment to turn it off. A full 20-segment sweep takes ~5 s at 0.25 s/segment. "
+        "Pass `null` for a segment to turn it off. A full 20-segment sweep takes "
+        "~5 s at 0.25 s/segment. "
         "This is the primary route for data-driven patterns."
     ),
 )
@@ -250,7 +258,8 @@ def set_scene(req: SceneRequest):
     tags=["Effects"],
     summary="List available effects",
     description=(
-        "Returns all registered effects with their name, label, description, and parameter schemas. "
+        "Returns all registered effects with their name, label, description, "
+        "and parameter schemas. "
         "Use the `name` field with `POST /api/effect` to activate an effect."
     ),
 )
@@ -263,7 +272,10 @@ def get_effects():
     response_model=Optional[EffectState],
     tags=["Effects"],
     summary="Get active effect",
-    description="Returns the currently running effect and its parameters, or null if none is active.",
+    description=(
+        "Returns the currently running effect and its parameters, "
+        "or null if none is active."
+    ),
 )
 def get_current_effect():
     c = _runner.current
@@ -344,7 +356,9 @@ def update_settings(req: AppSettings):
 _DIST = (Path(__file__).parent.parent / "frontend" / "dist").resolve()
 
 if _DIST.exists():
-    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+    _ASSETS = _DIST / "assets"
+    if _ASSETS.is_dir():
+        app.mount("/assets", StaticFiles(directory=_ASSETS), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str):

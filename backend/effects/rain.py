@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 import aiohttp
 
 import settings_store
+
 from ._params import as_int
 from .base import BaseEffect, ParamSchema
 

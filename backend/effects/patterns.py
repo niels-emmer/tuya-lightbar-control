@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import logging
+import math
 
 from ._params import as_choice, as_int
 from .base import BaseEffect, ParamSchema
@@ -88,7 +88,9 @@ class RandomEffect(BaseEffect):
         while True:
             v = round(brightness * (0.25 + 0.75 * (0.5 + 0.5 * math.sin(t * math.pi))))
             h = (hue_param + round(t * 30)) % 360 if color_mode == "multi" else hue_param
-            await loop.run_in_executor(None, lambda hh=h, vv=v: driver.set_color(hh, 100, max(1, vv)))
+            await loop.run_in_executor(
+                None, lambda hh=h, vv=v: driver.set_color(hh, 100, max(1, vv))
+            )
             await asyncio.sleep(0.25)
             t += dt
 
