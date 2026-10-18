@@ -1,7 +1,11 @@
-"""Polestar effect: pure parsing and rendering (no network, no device)."""
+"""Polestar effect: pure parsing/rendering and the run-loop blink (no network)."""
 
+import asyncio
 from types import SimpleNamespace
 
+import pypolestar
+
+import config
 from effects.polestar import PolestarEffect
 
 
@@ -29,6 +33,39 @@ def _telematics(
     )
     odometer = SimpleNamespace(odometer_meters=meters)
     return SimpleNamespace(battery=battery, odometer=odometer)
+
+
+def _snapshot(*, soc: int, charging: str, connection: str) -> dict:
+    return {"soc": soc, "charging_status": charging, "connection_status": connection}
+
+
+def _fake_api(calls: dict, vins: list[str]):
+    class FakeApi:
+        def __init__(self, username: str, password: str) -> None:
+            calls["creds"] = (username, password)
+
+        async def async_init(self) -> None:
+            calls["init"] = True
+
+        def get_available_vins(self) -> list[str]:
+            return vins
+
+        async def update_latest_data(self, vin: str, update_telematics: bool = True) -> None:
+            calls["vin"] = vin
+
+        def get_car_telematics(self, vin: str) -> SimpleNamespace:
+            return _telematics()
+
+        def get_grpc_battery(self, vin: str) -> None:
+            return None
+
+        async def async_logout(self) -> None:
+            calls["logout"] = True
+
+    return FakeApi
+
+
+# ── parsing ─────────────────────────────────────────────────────────────────
 
 
 def test_parse_maps_fields():
@@ -84,6 +121,9 @@ def test_charging_and_connection_detection():
     assert not PolestarEffect._is_connected(None)
 
 
+# ── rendering ───────────────────────────────────────────────────────────────
+
+
 def test_soc_hue_bands():
     assert PolestarEffect._soc_hue(80) == 120  # green
     assert PolestarEffect._soc_hue(60) == 120
@@ -91,85 +131,127 @@ def test_soc_hue_bands():
     assert PolestarEffect._soc_hue(10) == 0  # red
 
 
-def test_compute_no_data_is_dim_heartbeat():
-    e = PolestarEffect()
-    assert e._compute(None, 80, True) == [(0, 0, 5)] * 20
-    # A snapshot without an SOC also falls back to the heartbeat.
-    assert e._compute({"soc": None}, 100, True) == [(0, 0, 6)] * 20
+def test_state_no_data_is_dim_heartbeat():
+    assert PolestarEffect._state(None, 80) == (20, 0, 5, False)
+    assert PolestarEffect._state({"soc": None}, 100) == (20, 0, 6, False)
 
 
-def test_compute_charging_is_green_with_pulsing_tip():
-    e = PolestarEffect()
-    snap = {
-        "soc": 50,
-        "charging_status": "CHARGING_STATUS_CHARGING",
-        "connection_status": "CHARGER_CONNECTION_STATUS_CONNECTED",
-    }
-    lit = e._compute(snap, 100, True)
-    assert sum(c is not None for c in lit) == 10  # 50 % -> 10 segments
-    assert lit[0] == (120, 100, 100)  # green while charging
-    assert lit[9] == (120, 100, 100)  # tip full on this tick
-    # Next tick dims the tip so an active charge is visibly alive.
-    dim = e._compute(snap, 100, False)
-    assert dim[9][2] < lit[9][2]
+def test_state_charging_is_green():
+    snap = _snapshot(
+        soc=50,
+        charging="CHARGING_STATUS_CHARGING",
+        connection="CHARGER_CONNECTION_STATUS_CONNECTED",
+    )
+    assert PolestarEffect._state(snap, 100) == (10, 120, 100, True)
 
 
-def test_compute_disconnected_is_dim_and_static():
-    e = PolestarEffect()
-    snap = {
-        "soc": 80,
-        "charging_status": "CHARGING_STATUS_IDLE",
-        "connection_status": "CHARGER_CONNECTION_STATUS_DISCONNECTED",
-    }
-    colors = e._compute(snap, 100, True)
-    assert sum(c is not None for c in colors) == 16  # 80 % -> 16 segments
-    assert colors[0] == (120, 100, 40)  # green hue, dimmed
-    assert colors[15] == colors[14]  # no tip pulse when not charging
+def test_state_disconnected_is_dim():
+    snap = _snapshot(
+        soc=80,
+        charging="CHARGING_STATUS_IDLE",
+        connection="CHARGER_CONNECTION_STATUS_DISCONNECTED",
+    )
+    assert PolestarEffect._state(snap, 100) == (16, 120, 40, False)
 
 
-def test_compute_connected_idle_uses_soc_hue():
-    e = PolestarEffect()
-    snap = {
-        "soc": 40,
-        "charging_status": "CHARGING_STATUS_IDLE",
-        "connection_status": "CHARGER_CONNECTION_STATUS_CONNECTED",
-    }
-    colors = e._compute(snap, 100, True)
-    assert colors[0] == (40, 100, 100)  # amber, full brightness
-    assert sum(c is not None for c in colors) == 8
+def test_state_connected_idle_uses_soc_hue():
+    snap = _snapshot(
+        soc=40,
+        charging="CHARGING_STATUS_IDLE",
+        connection="CHARGER_CONNECTION_STATUS_CONNECTED",
+    )
+    assert PolestarEffect._state(snap, 100) == (8, 40, 100, False)
 
 
-def _fake_api(calls: dict, vins: list[str]):
-    class FakeApi:
-        def __init__(self, username: str, password: str) -> None:
-            calls["creds"] = (username, password)
+def test_colors_bar_length():
+    colors = PolestarEffect._colors(8, 40, 100)
+    assert len(colors) == 20
+    assert colors[:8] == [(40, 100, 100)] * 8
+    assert colors[8:] == [None] * 12
 
-        async def async_init(self) -> None:
-            calls["init"] = True
 
-        def get_available_vins(self) -> list[str]:
-            return vins
+# ── run loop ────────────────────────────────────────────────────────────────
 
-        async def update_latest_data(self, vin: str, update_telematics: bool = True) -> None:
-            calls["vin"] = vin
 
-        def get_car_telematics(self, vin: str) -> SimpleNamespace:
-            return _telematics()
+class _FakeDriver:
+    def __init__(self) -> None:
+        self.full_sweeps: list = []
+        self.tip_on: list = []
+        self.tip_off: list = []
 
-        def get_grpc_battery(self, vin: str) -> None:
-            return None
+    def set_all_segments(self, colors) -> bool:
+        self.full_sweeps.append(colors)
+        return True
 
-        async def async_logout(self) -> None:
-            calls["logout"] = True
+    def set_segment(self, segment: int, h: float, s: float, v: float) -> bool:
+        self.tip_on.append(segment)
+        return True
 
-    return FakeApi
+    def set_segment_off(self, segment: int) -> bool:
+        self.tip_off.append(segment)
+        return True
+
+
+def _run_briefly(monkeypatch, snapshot: dict, seconds: float) -> _FakeDriver:
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: SimpleNamespace(
+            polestar_username="u",
+            polestar_password="p",
+            polestar_vin="",
+            polestar_poll_interval=300,
+        ),
+    )
+
+    async def fake_fetch(self, cfg):
+        return snapshot
+
+    monkeypatch.setattr(PolestarEffect, "_fetch", fake_fetch)
+
+    async def go():
+        driver = _FakeDriver()
+        task = asyncio.create_task(PolestarEffect().run(driver, 100, {}))
+        await asyncio.sleep(seconds)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return driver
+
+    return asyncio.run(go())
+
+
+def test_run_blinks_tip_while_charging(monkeypatch):
+    snap = _snapshot(
+        soc=50,
+        charging="CHARGING_STATUS_CHARGING",
+        connection="CHARGER_CONNECTION_STATUS_CONNECTED",
+    )
+    driver = _run_briefly(monkeypatch, snap, 0.5)
+
+    # The bar is drawn once (50 % -> 10 segments), then only the tip toggles.
+    assert len(driver.full_sweeps) == 1
+    assert sum(c is not None for c in driver.full_sweeps[0]) == 10
+    assert driver.tip_off == [10]
+    assert driver.tip_on == [10]
+
+
+def test_run_does_not_blink_when_not_charging(monkeypatch):
+    snap = _snapshot(
+        soc=50,
+        charging="CHARGING_STATUS_IDLE",
+        connection="CHARGER_CONNECTION_STATUS_CONNECTED",
+    )
+    driver = _run_briefly(monkeypatch, snap, 0.5)
+
+    assert len(driver.full_sweeps) == 1
+    assert driver.tip_on == []
+    assert driver.tip_off == []
 
 
 def test_fetch_uses_first_vin_and_logs_out(monkeypatch):
-    import asyncio
-
-    import pypolestar
-
     calls: dict = {}
     monkeypatch.setattr(pypolestar, "PolestarApi", _fake_api(calls, ["VIN123"]))
     cfg = SimpleNamespace(polestar_username="u", polestar_password="p", polestar_vin="")
@@ -183,10 +265,6 @@ def test_fetch_uses_first_vin_and_logs_out(monkeypatch):
 
 
 def test_fetch_prefers_configured_vin(monkeypatch):
-    import asyncio
-
-    import pypolestar
-
     calls: dict = {}
     monkeypatch.setattr(pypolestar, "PolestarApi", _fake_api(calls, ["AUTO"]))
     cfg = SimpleNamespace(polestar_username="u", polestar_password="p", polestar_vin="CHOSEN")
