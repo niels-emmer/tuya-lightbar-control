@@ -64,7 +64,12 @@ class PolestarEffect(BaseEffect):
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.warning(f"polestar fetch error: {e}")
+                    # Log the type and chained cause: pypolestar raises
+                    # PolestarApiException with an empty message, hiding the
+                    # real GraphQL error underneath it.
+                    logger.warning(
+                        f"polestar fetch error: {type(e).__name__}: {e}", exc_info=True
+                    )
                 last_poll = loop.time()
 
             tick = not tick
@@ -89,7 +94,14 @@ class PolestarEffect(BaseEffect):
             telematics = api.get_car_telematics(vin)
             if telematics is None:
                 raise RuntimeError("telematics returned None after update")
-            return self._parse(telematics)
+            # The GraphQL telematics query carries no charger-connection or
+            # power data; pypolestar's optional gRPC path does. Not every
+            # vehicle supports it, so treat it as best-effort.
+            try:
+                grpc_battery = api.get_grpc_battery(vin)
+            except Exception:
+                grpc_battery = None
+            return self._parse(telematics, grpc_battery)
         finally:
             try:
                 await api.async_logout()
@@ -109,24 +121,39 @@ class PolestarEffect(BaseEffect):
         return vins[0]
 
     @staticmethod
-    def _parse(telematics: Any) -> dict:
+    def _parse(telematics: Any, grpc_battery: Any = None) -> dict:
         battery = getattr(telematics, "battery", None)
         odometer = getattr(telematics, "odometer", None)
+
+        def _pick(*values: Any) -> Any:
+            for value in values:
+                if value is not None:
+                    return value
+            return None
 
         def _battery(attr: str) -> Any:
             return getattr(battery, attr, None) if battery is not None else None
 
-        def _enum_name(obj: Any, attr: str) -> Optional[str]:
-            value = getattr(obj, attr, None) if obj is not None else None
+        def _grpc(attr: str) -> Any:
+            return getattr(grpc_battery, attr, None) if grpc_battery is not None else None
+
+        def _enum_name(value: Any) -> Optional[str]:
             return getattr(value, "name", None)
 
         odometer_m = getattr(odometer, "odometer_meters", None) if odometer is not None else None
         return {
-            "soc": _battery("battery_charge_level_percentage"),
+            "soc": _pick(
+                _battery("battery_charge_level_percentage"),
+                _grpc("battery_charge_level_percentage"),
+            ),
             "range_km": _battery("estimated_distance_to_empty_km"),
-            "charging_status": _enum_name(battery, "charging_status"),
-            "connection_status": _enum_name(battery, "charger_connection_status"),
-            "charging_power_watts": _battery("charging_power_watts"),
+            "charging_status": _enum_name(_battery("charging_status")),
+            "connection_status": _enum_name(
+                _pick(_grpc("charger_connection_status"), _battery("charger_connection_status"))
+            ),
+            "charging_power_watts": _pick(
+                _grpc("charging_power_watts"), _battery("charging_power_watts")
+            ),
             "charging_time_min": _battery("estimated_charging_time_to_full_minutes"),
             "odometer_km": round(odometer_m / 1000) if odometer_m is not None else None,
         }
