@@ -221,6 +221,7 @@ Effects are activated via `POST /api/effect` or from the frontend. Only one runs
 | **Claude Token Budget** | `claude_usage` | Remaining Claude Pro budget from the local nanoclaw-cyd-monitor daemon (`CLAUDE_USAGE_URL`). Full bar = budget untouched; empties as you use it. Params: `mode` (`session` / `weekly` / `alternate`). |
 | **Air Quality** | `air_quality` | Severity bar for local air quality from Open-Meteo (your saved weather location). Fill grows with pollution; colour ramps green → yellow → orange → red. Tip pulses to show it is live. Refreshes every 10 min. Params: `metric` (`aqi` / `pm2_5`). |
 | **Home Power** | `home_power` | Live whole-home power draw (W) from a DSMR P1 smart-meter reader over MQTT (`sensors/power/p1meter/actual_consumption`). Bar fills with load, ramps green → red; near-real-time. Params: `max_w`. Config: `MQTT_HOST` / `MQTT_PORT` / `MQTT_TOPIC`. |
+| **Polestar** | `polestar` | Charging state of a Polestar EV, read directly via `pypolestar`. Bar fills with state-of-charge (green ≥ 60 %, amber ≥ 25 %, red below). Actively charging → green bar with a pulsing tip; plugged in but idle → static SOC bar; unplugged → dimmed. Config: `POLESTAR_USERNAME` / `POLESTAR_PASSWORD` (optional `POLESTAR_VIN`, `POLESTAR_POLL_INTERVAL`). |
 
 > **Docker note:** The network_traffic effect requires a `/proc/net` volume mount (included in `docker-compose.yml`) to read host-level interface stats rather than the container's virtual eth0.
 
@@ -246,6 +247,8 @@ Effects are activated via `POST /api/effect` or from the frontend. Only one runs
 | `WEATHER_LAT` / `WEATHER_LON` | First-run seed for `settings.json` (rain + air_quality) |
 | `MQTT_HOST` / `MQTT_PORT` / `MQTT_TOPIC` | DSMR P1 meter broker for `home_power` |
 | `CLAUDE_USAGE_URL` | nanoclaw-cyd-monitor daemon for `claude_usage` |
+| `POLESTAR_USERNAME` / `POLESTAR_PASSWORD` | Polestar account for `polestar` (empty disables it) |
+| `POLESTAR_VIN` / `POLESTAR_POLL_INTERVAL` | Optional vehicle VIN and poll interval (seconds) for `polestar` |
 | `API_KEY` | Shared secret; empty disables auth |
 
 ### Runtime (`settings.json`)
@@ -298,7 +301,8 @@ curl -fsS http://127.0.0.1:8042/healthz   # -> {"ok": true}
 │       ├── network_traffic.py   # Host RX/TX bandwidth
 │       ├── claude_usage.py      # Claude Pro budget
 │       ├── air_quality.py       # Air quality (Open-Meteo)
-│       └── home_power.py        # Home power (MQTT / P1 meter)
+│       ├── home_power.py        # Home power (MQTT / P1 meter)
+│       └── polestar.py          # Polestar EV charging state (pypolestar)
 └── frontend/
     └── src/
         ├── App.tsx              # Root component, polling loop
