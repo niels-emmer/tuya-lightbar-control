@@ -8,9 +8,12 @@ from .base import BaseEffect
 
 logger = logging.getLogger(__name__)
 
-# A full 20-segment DP 61 sweep takes ~5 s, so this only bounds the sleep
-# between frames — the real frame rate is the sweep itself.
-_REFRESH_INTERVAL = 1.0
+# A full 20-segment DP 61 sweep takes ~5 s, so the SOC bar is drawn only when it
+# actually changes. An active charge is shown by blinking the tip with
+# single-segment DP 61 writes (~200 ms each) — fast enough to read as a pulse,
+# where a whole-bar redraw every frame would not be.
+_PULSE_INTERVAL = 0.3  # seconds between tip blinks while charging
+_IDLE_INTERVAL = 2.0  # seconds between checks when not charging
 # Never hammer the Polestar login endpoint: each fetch is a full OIDC login.
 _MIN_POLL_INTERVAL = 30
 _N_SEGMENTS = 20
@@ -19,6 +22,8 @@ _N_SEGMENTS = 20
 # "CHARGING" but are not an active charge.
 _CHARGING_STATUSES = frozenset({"CHARGING_STATUS_CHARGING", "CHARGING_STATUS_SMART_CHARGING"})
 _CONNECTED_STATUSES = frozenset({"CHARGER_CONNECTION_STATUS_CONNECTED"})
+_CHARGING_HUE = 120
+_HEARTBEAT_HUE = 0
 
 
 class PolestarEffect(BaseEffect):
@@ -27,9 +32,9 @@ class PolestarEffect(BaseEffect):
     description = (
         "Charging state of a Polestar EV, read directly via pypolestar. The bar "
         "fills with state-of-charge; the hue is green (≥ 60 %), amber (≥ 25 %) "
-        "or red below. While the car is actively charging the whole bar is green "
-        "and its tip pulses; plugged in but idle shows a static SOC bar; "
-        "unplugged dims it. With no data it shows a dim heartbeat. Requires "
+        "or red below. While the car is actively charging the bar is green and "
+        "its tip blinks; plugged in but idle shows a static SOC bar; unplugged "
+        "dims it. With no data it shows a dim heartbeat. Requires "
         "POLESTAR_USERNAME / POLESTAR_PASSWORD (and optionally POLESTAR_VIN)."
     )
 
@@ -48,7 +53,8 @@ class PolestarEffect(BaseEffect):
 
         snapshot: Optional[dict] = None
         last_poll: Optional[float] = None
-        tick = False
+        drawn: Optional[tuple] = None
+        tip_on = True
 
         while True:
             now = loop.time()
@@ -72,10 +78,31 @@ class PolestarEffect(BaseEffect):
                     )
                 last_poll = loop.time()
 
-            tick = not tick
-            colors = self._compute(snapshot, brightness, tick)
-            await loop.run_in_executor(None, lambda c=colors: driver.set_all_segments(c))
-            await asyncio.sleep(_REFRESH_INTERVAL)
+            n_lit, hue, value, charging = self._state(snapshot, brightness)
+
+            # Redraw the whole bar only when it changes — a sweep is ~5 s, so
+            # this must not run every frame.
+            key = (n_lit, hue, value, charging)
+            if key != drawn:
+                colors = self._colors(n_lit, hue, value)
+                await loop.run_in_executor(None, lambda c=colors: driver.set_all_segments(c))
+                drawn = key
+                tip_on = True
+
+            if charging and n_lit > 0:
+                # Blink the tip so an active charge is visible. Single-segment
+                # writes are ~200 ms; a whole-bar redraw would be ~5 s.
+                tip_on = not tip_on
+                tip = n_lit
+                if tip_on:
+                    await loop.run_in_executor(
+                        None, lambda s=tip, h=hue, v=value: driver.set_segment(s, h, 100, v)
+                    )
+                else:
+                    await loop.run_in_executor(None, lambda s=tip: driver.set_segment_off(s))
+                await asyncio.sleep(_PULSE_INTERVAL)
+            else:
+                await asyncio.sleep(_IDLE_INTERVAL)
 
     async def _fetch(self, cfg: Any) -> dict:
         # Imported lazily so the app (and its tests) don't require pypolestar
@@ -174,33 +201,25 @@ class PolestarEffect(BaseEffect):
             return 40  # amber
         return 0  # red
 
-    def _compute(self, snapshot: Optional[dict], brightness: int, tick: bool) -> list:
+    @staticmethod
+    def _state(snapshot: Optional[dict], brightness: int) -> tuple[int, int, int, bool]:
+        """Return ``(n_lit, hue, value, charging)`` for the current snapshot."""
         if snapshot is None or snapshot.get("soc") is None:
             # No data yet / fetch failing / no credentials — dim heartbeat.
-            return [(0, 0, max(2, round(brightness * 0.06)))] * _N_SEGMENTS
+            return (_N_SEGMENTS, _HEARTBEAT_HUE, max(2, round(brightness * 0.06)), False)
 
         soc = max(0.0, min(100.0, float(snapshot["soc"])))
         n_lit = round(soc / 100 * _N_SEGMENTS)
-        charging = self._is_charging(snapshot.get("charging_status"))
-        connected = self._is_connected(snapshot.get("connection_status"))
+        if PolestarEffect._is_charging(snapshot.get("charging_status")):
+            # While charging the bar reads green; the tip blinks (in run()).
+            return (n_lit, _CHARGING_HUE, brightness, True)
 
-        # While charging the bar reads green (activity); otherwise the hue
-        # encodes SOC health. Unplugged dims the whole bar.
-        if charging:
-            hue = 120
-            value = brightness
-        else:
-            hue = self._soc_hue(soc)
-            value = brightness if connected else max(2, round(brightness * 0.4))
+        hue = PolestarEffect._soc_hue(soc)
+        connected = PolestarEffect._is_connected(snapshot.get("connection_status"))
+        value = brightness if connected else max(2, round(brightness * 0.4))
+        return (n_lit, hue, value, False)
 
-        colors: list = []
-        for i in range(_N_SEGMENTS):
-            if i >= n_lit:
-                colors.append(None)
-                continue
-            v = value
-            if charging and i == n_lit - 1 and not tick:
-                # Pulse the tip so an active charge is visibly alive.
-                v = max(3, round(brightness * 0.35))
-            colors.append((hue, 100, v))
-        return colors
+    @staticmethod
+    def _colors(n_lit: int, hue: int, value: int) -> list:
+        """The static bar: ``n_lit`` lit segments, the rest off."""
+        return [(hue, 100, value) if i < n_lit else None for i in range(_N_SEGMENTS)]
