@@ -20,6 +20,20 @@ def test_effects_list():
     assert isinstance(r.json(), list) and r.json()
 
 
+def test_root_serves_spa():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+
+
+def test_unknown_path_is_404():
+    # No SPA catch-all: a probe for a spec file that does not exist must get an
+    # honest 404, not 200 + index.html.
+    assert client.get("/llms.txt").status_code == 404
+    assert client.get("/.well-known/ai-plugin.json").status_code == 404
+    assert client.get("/api/does-not-exist").status_code == 404
+
+
 def test_device_route_503_without_driver(monkeypatch):
     monkeypatch.setattr(main, "_driver", None)
     assert client.post("/api/power", json={"on": True}).status_code == 503

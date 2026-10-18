@@ -99,7 +99,7 @@ In the container image the built frontend is served by FastAPI itself, so **fron
 | `GET` | `/api/settings` | yes | Persisted UI settings |
 | `PUT` | `/api/settings` | yes | Update persisted UI settings |
 
-Interactive docs at `/docs` after startup (subject to auth when `API_KEY` is set).
+Full agent-facing description: [`API.md`](API.md). Live OpenAPI at `/openapi.json`, plus Swagger UI at `/docs` and ReDoc at `/redoc` — all subject to auth when `API_KEY` is set.
 
 ## Prerequisites
 
@@ -276,6 +276,7 @@ curl -fsS http://127.0.0.1:8042/healthz   # -> {"ok": true}
 ├── settings.json                # Runtime UI settings (not in git)
 ├── settings.json.example
 ├── pyproject.toml               # pytest + ruff config
+├── API.md                       # Agent-facing API description (endpoints, auth, examples)
 ├── .github/workflows/ci.yml     # backend (ruff+pytest) + frontend (build+audit)
 ├── docs/                        # ARCHITECTURE, DEPLOYMENT, decision-log
 ├── backend/
