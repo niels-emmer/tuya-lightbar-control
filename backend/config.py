@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     mqtt_port: int = 1883
     mqtt_topic: str = "sensors/power/p1meter/actual_consumption"
 
+    # Polestar EV — charging state for the polestar effect. The Polestar API is
+    # reverse-engineered (pypolestar); empty username/password disables the
+    # effect (it shows a heartbeat). POLESTAR_VIN is optional: when empty the
+    # first vehicle on the account is used. Each poll performs a full login, so
+    # the interval is deliberately long (seconds).
+    polestar_username: str = ""
+    polestar_password: str = ""
+    polestar_vin: str = ""
+    polestar_poll_interval: int = 300
+
 
 @lru_cache
 def get_settings() -> Settings:

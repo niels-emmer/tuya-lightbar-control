@@ -12,6 +12,7 @@ EXPECTED = {
     "claude_usage",
     "air_quality",
     "home_power",
+    "polestar",
 }
 
 

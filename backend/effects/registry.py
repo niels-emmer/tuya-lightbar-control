@@ -10,6 +10,7 @@ from .crypto import CryptoEffect
 from .home_power import HomePowerEffect
 from .network_traffic import NetworkTrafficEffect
 from .patterns import RandomEffect
+from .polestar import PolestarEffect
 from .rain import RainEffect
 from .trumps_truths import TrumpsTruthsEffect
 
@@ -23,6 +24,7 @@ _EFFECTS: list[BaseEffect] = [
     ClaudeUsageEffect(),
     AirQualityEffect(),
     HomePowerEffect(),
+    PolestarEffect(),
 ]
 
 _BY_NAME: dict[str, BaseEffect] = {e.name: e for e in _EFFECTS}
