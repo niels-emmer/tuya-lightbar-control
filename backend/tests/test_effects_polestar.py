@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pypolestar
 
 import config
-from effects.polestar import PolestarEffect
+from effects.polestar import PolestarEffect, _Frame
 
 
 class _Enum:
@@ -59,6 +59,9 @@ def _fake_api(calls: dict, vins: list[str]):
         def get_grpc_battery(self, vin: str) -> None:
             return None
 
+        def get_grpc_target_soc(self, vin: str) -> None:
+            return None
+
         async def async_logout(self) -> None:
             calls["logout"] = True
 
@@ -71,12 +74,19 @@ def _fake_api(calls: dict, vins: list[str]):
 def test_parse_maps_fields():
     snap = PolestarEffect._parse(_telematics())
     assert snap["soc"] == 72
+    assert snap["target_soc"] is None  # gRPC-only
     assert snap["range_km"] == 310
     assert snap["charging_status"] == "CHARGING_STATUS_CHARGING"
     assert snap["connection_status"] == "CHARGER_CONNECTION_STATUS_CONNECTED"
     assert snap["charging_power_watts"] == 11_000
     assert snap["charging_time_min"] == 45
     assert snap["odometer_km"] == 12_346  # metres -> km, rounded
+
+
+def test_parse_reads_grpc_target_soc():
+    target = SimpleNamespace(battery_charge_target_level=90)
+    snap = PolestarEffect._parse(_telematics(), None, target)
+    assert snap["target_soc"] == 90
 
 
 def test_parse_handles_missing_data():
@@ -132,8 +142,8 @@ def test_soc_hue_bands():
 
 
 def test_state_no_data_is_dim_heartbeat():
-    assert PolestarEffect._state(None, 80) == (20, 0, 5, False)
-    assert PolestarEffect._state({"soc": None}, 100) == (20, 0, 6, False)
+    assert PolestarEffect._state(None, 80) == (20, 0, 5, False, 0)
+    assert PolestarEffect._state({"soc": None}, 100) == (20, 0, 6, False, 0)
 
 
 def test_state_charging_is_green():
@@ -142,7 +152,7 @@ def test_state_charging_is_green():
         charging="CHARGING_STATUS_CHARGING",
         connection="CHARGER_CONNECTION_STATUS_CONNECTED",
     )
-    assert PolestarEffect._state(snap, 100) == (10, 120, 100, True)
+    assert PolestarEffect._state(snap, 100) == (10, 120, 100, True, 0)
 
 
 def test_state_disconnected_is_dim():
@@ -151,7 +161,7 @@ def test_state_disconnected_is_dim():
         charging="CHARGING_STATUS_IDLE",
         connection="CHARGER_CONNECTION_STATUS_DISCONNECTED",
     )
-    assert PolestarEffect._state(snap, 100) == (16, 120, 40, False)
+    assert PolestarEffect._state(snap, 100) == (16, 120, 40, False, 0)
 
 
 def test_state_connected_idle_uses_soc_hue():
@@ -160,14 +170,39 @@ def test_state_connected_idle_uses_soc_hue():
         charging="CHARGING_STATUS_IDLE",
         connection="CHARGER_CONNECTION_STATUS_CONNECTED",
     )
-    assert PolestarEffect._state(snap, 100) == (8, 40, 100, False)
+    assert PolestarEffect._state(snap, 100) == (8, 40, 100, False, 0)
+
+
+def test_state_includes_target_lit():
+    snap = {
+        "soc": 42,
+        "target_soc": 90,
+        "charging_status": "CHARGING_STATUS_CHARGING",
+        "connection_status": "CHARGER_CONNECTION_STATUS_CONNECTED",
+    }
+    # 90 % -> 18 segments; 42 % -> 8.
+    assert PolestarEffect._state(snap, 100) == (8, 120, 100, True, 18)
 
 
 def test_colors_bar_length():
-    colors = PolestarEffect._colors(8, 40, 100)
+    colors = PolestarEffect._colors(_Frame(8, 40, 100, False, 0))
     assert len(colors) == 20
     assert colors[:8] == [(40, 100, 100)] * 8
     assert colors[8:] == [None] * 12
+
+
+def test_colors_draws_marker_ahead_of_fill():
+    # 42 % filled, 90 % target -> a dim neutral marker on segment 18 (index 17).
+    colors = PolestarEffect._colors(_Frame(8, 120, 100, True, 18))
+    assert colors[17] == (0, 0, 40)
+    assert colors[8:17] == [None] * 9
+    assert colors[18:] == [None] * 2
+
+
+def test_colors_drops_marker_once_fill_reaches_it():
+    # Fill at the target: index 17 is part of the fill, so no marker.
+    colors = PolestarEffect._colors(_Frame(18, 120, 100, True, 18))
+    assert colors[17] == (120, 100, 100)
 
 
 # ── run loop ────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from .base import BaseEffect
 
@@ -24,6 +24,23 @@ _CHARGING_STATUSES = frozenset({"CHARGING_STATUS_CHARGING", "CHARGING_STATUS_SMA
 _CONNECTED_STATUSES = frozenset({"CHARGER_CONNECTION_STATUS_CONNECTED"})
 _CHARGING_HUE = 120
 _HEARTBEAT_HUE = 0
+# Neutral (white) marker for the charge limit set in the Polestar app.
+_MARKER_HUE = 0
+_MARKER_SAT = 0
+
+
+class _Frame(NamedTuple):
+    """What the bar should show right now.
+
+    ``target_lit`` is the number of segments the charge limit corresponds to,
+    or 0 when unknown / no marker.
+    """
+
+    n_lit: int
+    hue: int
+    value: int
+    charging: bool
+    target_lit: int = 0
 
 
 class PolestarEffect(BaseEffect):
@@ -34,8 +51,9 @@ class PolestarEffect(BaseEffect):
         "fills with state-of-charge; the hue is green (≥ 60 %), amber (≥ 25 %) "
         "or red below. While the car is actively charging the bar is green and "
         "its tip blinks; plugged in but idle shows a static SOC bar; unplugged "
-        "dims it. With no data it shows a dim heartbeat. Requires "
-        "POLESTAR_USERNAME / POLESTAR_PASSWORD (and optionally POLESTAR_VIN)."
+        "dims it. A dim marker shows the charge limit set in the app. With no "
+        "data it shows a dim heartbeat. Requires POLESTAR_USERNAME / "
+        "POLESTAR_PASSWORD (and optionally POLESTAR_VIN)."
     )
 
     async def run(self, driver, brightness: int, params: dict) -> None:
@@ -53,7 +71,7 @@ class PolestarEffect(BaseEffect):
 
         snapshot: Optional[dict] = None
         last_poll: Optional[float] = None
-        drawn: Optional[tuple] = None
+        drawn: Optional[_Frame] = None
         tip_on = True
 
         while True:
@@ -62,8 +80,9 @@ class PolestarEffect(BaseEffect):
                 try:
                     snapshot = await self._fetch(cfg)
                     logger.info(
-                        "polestar: soc=%s charging=%s connection=%s",
+                        "polestar: soc=%s target=%s charging=%s connection=%s",
                         snapshot.get("soc"),
+                        snapshot.get("target_soc"),
                         snapshot.get("charging_status"),
                         snapshot.get("connection_status"),
                     )
@@ -78,25 +97,25 @@ class PolestarEffect(BaseEffect):
                     )
                 last_poll = loop.time()
 
-            n_lit, hue, value, charging = self._state(snapshot, brightness)
+            frame = self._state(snapshot, brightness)
 
             # Redraw the whole bar only when it changes — a sweep is ~5 s, so
             # this must not run every frame.
-            key = (n_lit, hue, value, charging)
-            if key != drawn:
-                colors = self._colors(n_lit, hue, value)
+            if frame != drawn:
+                colors = self._colors(frame)
                 await loop.run_in_executor(None, lambda c=colors: driver.set_all_segments(c))
-                drawn = key
+                drawn = frame
                 tip_on = True
 
-            if charging and n_lit > 0:
+            if frame.charging and frame.n_lit > 0:
                 # Blink the tip so an active charge is visible. Single-segment
                 # writes are ~200 ms; a whole-bar redraw would be ~5 s.
                 tip_on = not tip_on
-                tip = n_lit
+                tip = frame.n_lit
                 if tip_on:
                     await loop.run_in_executor(
-                        None, lambda s=tip, h=hue, v=value: driver.set_segment(s, h, 100, v)
+                        None,
+                        lambda s=tip, h=frame.hue, v=frame.value: driver.set_segment(s, h, 100, v),
                     )
                 else:
                     await loop.run_in_executor(None, lambda s=tip: driver.set_segment_off(s))
@@ -121,14 +140,11 @@ class PolestarEffect(BaseEffect):
             telematics = api.get_car_telematics(vin)
             if telematics is None:
                 raise RuntimeError("telematics returned None after update")
-            # The GraphQL telematics query carries no charger-connection or
-            # power data; pypolestar's optional gRPC path does. Not every
-            # vehicle supports it, so treat it as best-effort.
-            try:
-                grpc_battery = api.get_grpc_battery(vin)
-            except Exception:
-                grpc_battery = None
-            return self._parse(telematics, grpc_battery)
+            # The GraphQL telematics query carries no charger-connection,
+            # power or charge-limit data; pypolestar's optional gRPC path does.
+            # Not every vehicle supports it, so treat it as best-effort.
+            return self._parse(telematics, self._grpc(api, "get_grpc_battery", vin),
+                               self._grpc(api, "get_grpc_target_soc", vin))
         finally:
             try:
                 await api.async_logout()
@@ -141,6 +157,14 @@ class PolestarEffect(BaseEffect):
                 await asyncio.gather(*leaked, return_exceptions=True)
 
     @staticmethod
+    def _grpc(api: Any, method: str, vin: str) -> Any:
+        """Call an optional pypolestar gRPC getter, tolerating any failure."""
+        try:
+            return getattr(api, method)(vin)
+        except Exception:
+            return None
+
+    @staticmethod
     def _first_vin(api: Any) -> str:
         vins = api.get_available_vins()
         if not vins:
@@ -148,7 +172,7 @@ class PolestarEffect(BaseEffect):
         return vins[0]
 
     @staticmethod
-    def _parse(telematics: Any, grpc_battery: Any = None) -> dict:
+    def _parse(telematics: Any, grpc_battery: Any = None, grpc_target: Any = None) -> dict:
         battery = getattr(telematics, "battery", None)
         odometer = getattr(telematics, "odometer", None)
 
@@ -164,6 +188,9 @@ class PolestarEffect(BaseEffect):
         def _grpc(attr: str) -> Any:
             return getattr(grpc_battery, attr, None) if grpc_battery is not None else None
 
+        def _target(attr: str) -> Any:
+            return getattr(grpc_target, attr, None) if grpc_target is not None else None
+
         def _enum_name(value: Any) -> Optional[str]:
             return getattr(value, "name", None)
 
@@ -173,6 +200,7 @@ class PolestarEffect(BaseEffect):
                 _battery("battery_charge_level_percentage"),
                 _grpc("battery_charge_level_percentage"),
             ),
+            "target_soc": _target("battery_charge_target_level"),
             "range_km": _battery("estimated_distance_to_empty_km"),
             "charging_status": _enum_name(_battery("charging_status")),
             "connection_status": _enum_name(
@@ -202,24 +230,43 @@ class PolestarEffect(BaseEffect):
         return 0  # red
 
     @staticmethod
-    def _state(snapshot: Optional[dict], brightness: int) -> tuple[int, int, int, bool]:
-        """Return ``(n_lit, hue, value, charging)`` for the current snapshot."""
-        if snapshot is None or snapshot.get("soc") is None:
-            # No data yet / fetch failing / no credentials — dim heartbeat.
-            return (_N_SEGMENTS, _HEARTBEAT_HUE, max(2, round(brightness * 0.06)), False)
-
-        soc = max(0.0, min(100.0, float(snapshot["soc"])))
-        n_lit = round(soc / 100 * _N_SEGMENTS)
-        if PolestarEffect._is_charging(snapshot.get("charging_status")):
-            # While charging the bar reads green; the tip blinks (in run()).
-            return (n_lit, _CHARGING_HUE, brightness, True)
-
-        hue = PolestarEffect._soc_hue(soc)
-        connected = PolestarEffect._is_connected(snapshot.get("connection_status"))
-        value = brightness if connected else max(2, round(brightness * 0.4))
-        return (n_lit, hue, value, False)
+    def _lit_for(pct: Any) -> int:
+        """Segments a 0–100 percentage fills, clamped to the bar."""
+        value = max(0.0, min(100.0, float(pct)))
+        return round(value / 100 * _N_SEGMENTS)
 
     @staticmethod
-    def _colors(n_lit: int, hue: int, value: int) -> list:
-        """The static bar: ``n_lit`` lit segments, the rest off."""
-        return [(hue, 100, value) if i < n_lit else None for i in range(_N_SEGMENTS)]
+    def _state(snapshot: Optional[dict], brightness: int) -> _Frame:
+        if snapshot is None or snapshot.get("soc") is None:
+            # No data yet / fetch failing / no credentials — dim heartbeat.
+            return _Frame(_N_SEGMENTS, _HEARTBEAT_HUE, max(2, round(brightness * 0.06)), False)
+
+        n_lit = PolestarEffect._lit_for(snapshot["soc"])
+        target_lit = 0
+        if snapshot.get("target_soc") is not None:
+            target_lit = PolestarEffect._lit_for(snapshot["target_soc"])
+
+        if PolestarEffect._is_charging(snapshot.get("charging_status")):
+            # While charging the bar reads green; the tip blinks (in run()).
+            return _Frame(n_lit, _CHARGING_HUE, brightness, True, target_lit)
+
+        hue = PolestarEffect._soc_hue(float(snapshot["soc"]))
+        connected = PolestarEffect._is_connected(snapshot.get("connection_status"))
+        value = brightness if connected else max(2, round(brightness * 0.4))
+        return _Frame(n_lit, hue, value, False, target_lit)
+
+    @staticmethod
+    def _colors(frame: _Frame) -> list:
+        """The static bar: the SOC fill, plus a dim marker at the charge limit."""
+        marker_v = max(3, round(frame.value * 0.4))
+        colors: list = []
+        for i in range(_N_SEGMENTS):
+            if i < frame.n_lit:
+                colors.append((frame.hue, 100, frame.value))
+            elif frame.target_lit and i == frame.target_lit - 1:
+                # Charge limit sits ahead of the fill — mark it so you can see
+                # how close you are (it disappears once the fill reaches it).
+                colors.append((_MARKER_HUE, _MARKER_SAT, marker_v))
+            else:
+                colors.append(None)
+        return colors
