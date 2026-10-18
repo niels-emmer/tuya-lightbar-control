@@ -131,7 +131,11 @@ def healthz():
     summary="Get device status",
     description=(
         "Returns whether the lightbar is reachable, its power state, current "
-        "mode, and whole-bar HSV color."
+        "mode, whole-bar HSV color, and the running effect (if any). "
+        "`mode` is `\"effect\"` while an effect is active; `color` is `null` "
+        "then, because an effect paints per-segment (DP 61) and never updates "
+        "the whole-bar DP 24 register — reporting it would hand a "
+        "snapshot/restore caller a stale colour."
     ),
 )
 def get_status():
@@ -140,16 +144,27 @@ def get_status():
     dps = _driver.get_status()
     if dps is None:
         return DeviceStatus(online=False)
+
+    # An effect drives the bar per-segment (DP 61) and never writes the
+    # whole-bar DP 24, so while one runs — or after any segment/scene write —
+    # DP 24 is a stale register, not what is on the bar. Report the effect
+    # rather than a colour that would fool a snapshot/restore consumer.
+    active = _runner.current
+    effect = EffectState(name=active["name"], params=active["params"]) if active else None
+
     color: Optional[HSV] = None
-    raw = dps.get(24)
-    if isinstance(raw, str) and len(raw) == 12:
-        h, s, v = tuya_to_hsv(raw)
-        color = HSV(h=h, s=s, v=v)
+    if active is None and not _driver.whole_bar_stale:
+        raw = dps.get(24)
+        if isinstance(raw, str) and len(raw) == 12:
+            h, s, v = tuya_to_hsv(raw)
+            color = HSV(h=h, s=s, v=v)
+
     return DeviceStatus(
         online=True,
         power=dps.get(20),
-        mode=dps.get(21),
+        mode="effect" if active else dps.get(21),
         color=color,
+        effect=effect,
     )
 
 

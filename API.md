@@ -22,7 +22,7 @@ There are two ways in, depending on where the caller runs:
 
 ### GET /api/status
 
-Device status: reachability, power, mode, and whole-bar colour.
+Device status: reachability, power, mode, whole-bar colour, and the running effect.
 
 Example:
 
@@ -31,10 +31,16 @@ curl -s http://<host>:8042/api/status -H "X-API-Key: $KEY"
 ```
 
 ```json
-{ "online": true, "power": true, "mode": "colour", "color": { "h": 231, "s": 100, "v": 80 } }
+{ "online": true, "power": true, "mode": "colour",
+  "color": { "h": 231, "s": 100, "v": 80 }, "effect": null }
 ```
 
-`color` is `null` when unknown. `online: false` means the device did not answer.
+- `mode` is `"effect"` while an effect is active, otherwise the device's DP 21 (`"colour"` / `"scene"`).
+- `color` is the whole-bar DP 24 register, and is `null` whenever it does **not** describe what is on the bar — while an effect is active, or after any per-segment (`/api/segments`, `/api/segment/{n}`) or scene write. The device keeps reporting the last whole-bar colour it was given, so echoing it would hand a snapshot/restore caller a stale colour.
+- `effect` is `{ "name", "params" }` when one is running, else `null`.
+- `color` is also `null` when unknown; `online: false` means the device did not answer.
+
+> **Snapshot/restore: key off `effect`, not `color`.** Read `GET /api/status`; if `effect` is non-null, restore by re-activating that `{name, params}`; if it is null and `color` is set, restore with `POST /api/color`; if both are null there is no known whole-bar colour to restore.
 
 ### POST /api/power
 

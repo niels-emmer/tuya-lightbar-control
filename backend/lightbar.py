@@ -83,6 +83,10 @@ class LightbarDriver:
         self._lock = threading.Lock()
         self._device: tinytuya.BulbDevice | None = None
         self._online = False
+        # True once a per-segment (DP 61) or scene (DP 51) write has happened
+        # since the last whole-bar (DP 24) write. The device keeps reporting the
+        # stale DP 24 register, which no longer describes what is on the bar.
+        self._whole_bar_stale = False
 
     def _connect(self) -> tinytuya.BulbDevice:
         d = tinytuya.BulbDevice(
@@ -116,6 +120,7 @@ class LightbarDriver:
                     d.set_value(21, "colour")  # ensure colour mode
                     d.set_value(24, hex_val)
                 self._online = True
+                self._whole_bar_stale = False
                 return True
             except Exception as e:
                 logger.warning(f"Lightbar set_color failed: {e}")
@@ -151,6 +156,7 @@ class LightbarDriver:
                     d.set_value(21, "scene")
                     d.set_value(51, payload)
                 self._online = True
+                self._whole_bar_stale = True
                 return True
             except Exception as e:
                 logger.warning(f"Lightbar set_scene failed: {e}")
@@ -170,6 +176,7 @@ class LightbarDriver:
                     d.set_value(21, "colour")
                     d.set_value(61, payload)
                 self._online = True
+                self._whole_bar_stale = True
                 return True
             except Exception as e:
                 logger.warning(f"Lightbar set_segment failed: {e}")
@@ -185,6 +192,7 @@ class LightbarDriver:
                     d.set_value(21, "colour")
                     d.set_value(61, payload)
                 self._online = True
+                self._whole_bar_stale = True
                 return True
             except Exception as e:
                 logger.warning(f"Lightbar set_segment_off failed: {e}")
@@ -233,6 +241,7 @@ class LightbarDriver:
                         if i < len(colors) - 1:
                             time.sleep(segment_delay)
                 self._online = True
+                self._whole_bar_stale = True
                 return ok
             except Exception as e:
                 logger.warning(f"Lightbar set_all_segments failed: {e}")
@@ -255,3 +264,13 @@ class LightbarDriver:
     @property
     def online(self) -> bool:
         return self._online
+
+    @property
+    def whole_bar_stale(self) -> bool:
+        """True when DP 24 no longer describes the bar.
+
+        Set once a per-segment (DP 61) or scene (DP 51) write has happened since
+        the last whole-bar (DP 24) write — the device keeps reporting the old
+        DP 24 value, which is not what is on the bar.
+        """
+        return self._whole_bar_stale
