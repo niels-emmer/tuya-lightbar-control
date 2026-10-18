@@ -85,7 +85,7 @@ In the container image the built frontend is served by FastAPI itself, so **fron
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/healthz` | no | Liveness probe (`{"ok": true}`) |
-| `GET` | `/api/status` | yes | Device online state, power, mode, whole-bar HSV |
+| `GET` | `/api/status` | yes | Device online state, power, mode (`"effect"` while one runs), whole-bar HSV, running effect |
 | `POST` | `/api/power` | yes | `{ "on": bool }` |
 | `POST` | `/api/color` | yes | `{ "h", "s", "v" }` — whole bar via DP 24 (instant) |
 | `POST` | `/api/segment/{n}` | yes | `{ "h", "s", "v" }` — single segment (1–20) via DP 61 |

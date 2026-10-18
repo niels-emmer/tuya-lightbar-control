@@ -2,11 +2,31 @@
 
 import base64
 
-from lightbar import _segment_payload, hsv_to_tuya, tuya_to_hsv
+from lightbar import LightbarDriver, _segment_payload, hsv_to_tuya, tuya_to_hsv
 
 
 def _decode(payload: str) -> bytes:
     return base64.b64decode(payload)
+
+
+class _FakeDevice:
+    """Minimal stand-in for tinytuya.BulbDevice (records DP writes)."""
+
+    def __init__(self) -> None:
+        self.values: dict[int, object] = {}
+
+    def set_value(self, dp: int, value: object) -> dict:
+        self.values[dp] = value
+        return {"Error": None}
+
+    def close(self) -> None:
+        pass
+
+
+def _driver(monkeypatch) -> LightbarDriver:
+    d = LightbarDriver("dev", "1.2.3.4", "key")
+    monkeypatch.setattr(d, "_connect", _FakeDevice)
+    return d
 
 
 class TestHsvEncoding:
@@ -43,4 +63,38 @@ class TestSegmentPayload:
 
     def test_segment_index_is_clamped(self):
         assert _decode(_segment_payload(0, None))[12] == 1
+
+
+class TestWholeBarStaleness:
+    """DP 24 stops describing the bar once segments/scene are written."""
+
+    def test_fresh_driver_is_not_stale(self, monkeypatch):
+        assert _driver(monkeypatch).whole_bar_stale is False
+
+    def test_segment_write_marks_stale(self, monkeypatch):
+        d = _driver(monkeypatch)
+        d.set_segment(1, 0, 100, 100)
+        assert d.whole_bar_stale is True
+
+    def test_segment_off_marks_stale(self, monkeypatch):
+        d = _driver(monkeypatch)
+        d.set_segment_off(1)
+        assert d.whole_bar_stale is True
+
+    def test_sweep_marks_stale(self, monkeypatch):
+        d = _driver(monkeypatch)
+        d.set_all_segments([(0, 100, 100)] * 2, segment_delay=0)
+        assert d.whole_bar_stale is True
+
+    def test_scene_marks_stale(self, monkeypatch):
+        d = _driver(monkeypatch)
+        d.set_scene(1, 50, [(255, 0, 0)])
+        assert d.whole_bar_stale is True
+
+    def test_set_color_clears_staleness(self, monkeypatch):
+        d = _driver(monkeypatch)
+        d.set_all_segments([(0, 100, 100)] * 2, segment_delay=0)
+        assert d.whole_bar_stale is True
+        d.set_color(0, 100, 100)
+        assert d.whole_bar_stale is False
         assert _decode(_segment_payload(99, None))[12] == 20

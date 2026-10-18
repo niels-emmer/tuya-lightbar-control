@@ -43,6 +43,7 @@ class DeviceStatus(BaseModel):
     power: Optional[bool] = None
     mode: Optional[str] = None
     color: Optional[HSV] = None
+    effect: Optional["EffectState"] = None
 
 
 # ── Settings ────────────────────────────────────────────────────────────────
@@ -65,3 +66,8 @@ class EffectActivateRequest(BaseModel):
 class EffectState(BaseModel):
     name: str
     params: Dict[str, Any]
+
+
+# DeviceStatus references EffectState above (forward ref) — resolve it now that
+# EffectState exists.
+DeviceStatus.model_rebuild()
