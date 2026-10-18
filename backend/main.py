@@ -362,12 +362,19 @@ if _DIST.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str):
+        # Serve a real static file if it exists in dist (icons, manifest, ...).
         # Resolve and confine to _DIST — prevents path traversal
         # (e.g. GET /../../.env) from escaping the static directory.
         candidate = (_DIST / full_path).resolve()
         if candidate.is_file() and candidate.is_relative_to(_DIST):
             return FileResponse(candidate)
-        return FileResponse(_DIST / "index.html")
+        # The SPA has no client-side routes, so only its entry document is
+        # served. Everything else is a genuine 404: falling back to index.html
+        # here would answer probes like /llms.txt or /.well-known/ai-plugin.json
+        # with 200 + HTML, hiding the fact that they do not exist.
+        if full_path in ("", "index.html"):
+            return FileResponse(_DIST / "index.html")
+        raise HTTPException(status_code=404, detail="Not Found")
 else:
     @app.get("/", include_in_schema=False)
     def index():

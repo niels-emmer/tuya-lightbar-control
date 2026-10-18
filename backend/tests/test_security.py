@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import main
@@ -67,9 +67,20 @@ class TestKeysMatch:
 
 
 class TestSpaTraversal:
-    def test_unknown_path_serves_index(self):
-        resp = main.serve_spa("does-not-exist")
+    def test_root_serves_index(self):
+        resp = main.serve_spa("")
         assert Path(resp.path).name == "index.html"
+
+    def test_index_html_serves_index(self):
+        resp = main.serve_spa("index.html")
+        assert Path(resp.path).name == "index.html"
+
+    def test_unknown_path_returns_404(self):
+        # No index.html fallback: an unknown path (e.g. an agent probing
+        # /llms.txt) must get an honest 404, not 200 + HTML.
+        with pytest.raises(HTTPException) as exc:
+            main.serve_spa("does-not-exist")
+        assert exc.value.status_code == 404
 
     @pytest.mark.parametrize(
         "attack",
@@ -81,9 +92,11 @@ class TestSpaTraversal:
         ],
     )
     def test_traversal_is_confined_to_dist(self, attack):
-        resp = main.serve_spa(attack)
-        # Anything outside the dist directory must fall back to index.html.
-        assert Path(resp.path).name == "index.html"
+        # Must never serve a file outside dist; with no index.html fallback
+        # that means a 404.
+        with pytest.raises(HTTPException) as exc:
+            main.serve_spa(attack)
+        assert exc.value.status_code == 404
 
     def test_serves_real_file_inside_dist(self):
         target = main._DIST / "robots.txt"
