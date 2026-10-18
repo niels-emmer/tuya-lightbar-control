@@ -5,10 +5,8 @@ pydantic-settings==2.15.0
 python-dotenv==1.2.4
 aiohttp==3.14.4
 paho-mqtt==2.1.0
-# Polestar EV telematics for the polestar effect. Pinned to the last release
-# before the PS4-only gRPC path (1.12+), so it pulls only gql[httpx] + httpx
-# rather than grpcio/protobuf.
-pypolestar==1.11.0
+# Polestar EV telematics for the polestar effect.
+pypolestar==1.12.7
 # pypolestar imports backoff in graphql.py but does not declare it (upstream
 # packaging bug) — pin it here or `import pypolestar` fails.
 backoff==2.2.1

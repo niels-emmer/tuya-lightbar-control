@@ -50,6 +50,24 @@ def test_parse_handles_missing_data():
     assert snap["odometer_km"] is None
 
 
+def test_parse_prefers_grpc_connection_and_power():
+    # GraphQL telematics carries neither connection nor power; the gRPC path does.
+    grpc = SimpleNamespace(
+        charger_connection_status=_Enum("CHARGER_CONNECTION_STATUS_CONNECTED"),
+        charging_power_watts=9_900,
+        battery_charge_level_percentage=39.0,
+    )
+    snap = PolestarEffect._parse(_telematics(connection=None), grpc)
+    assert snap["connection_status"] == "CHARGER_CONNECTION_STATUS_CONNECTED"
+    assert snap["charging_power_watts"] == 9_900
+    assert snap["soc"] == 72  # telematics SOC still wins when present
+
+
+def test_parse_without_grpc_leaves_connection_none():
+    snap = PolestarEffect._parse(_telematics(connection=None), None)
+    assert snap["connection_status"] is None
+
+
 def test_charging_and_connection_detection():
     assert PolestarEffect._is_charging("CHARGING_STATUS_CHARGING")
     assert PolestarEffect._is_charging("CHARGING_STATUS_SMART_CHARGING")
@@ -137,6 +155,9 @@ def _fake_api(calls: dict, vins: list[str]):
 
         def get_car_telematics(self, vin: str) -> SimpleNamespace:
             return _telematics()
+
+        def get_grpc_battery(self, vin: str) -> None:
+            return None
 
         async def async_logout(self) -> None:
             calls["logout"] = True
