@@ -12,7 +12,7 @@
     "@mantine/core": "^9.7.1",
     "@mantine/hooks": "^9.7.1",
     "@tabler/icons-react": "^3.49.0",
-    "react": "^19.3.0",
+    "react": "^19.3.1",
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
