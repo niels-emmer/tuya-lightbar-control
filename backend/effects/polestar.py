@@ -128,10 +128,6 @@ class PolestarEffect(BaseEffect):
         # unless this effect is actually used.
         from pypolestar import PolestarApi
 
-        # pypolestar's gql session spawns a persistent reconnect task that
-        # async_logout() closes the socket for but never cancels. Snapshot the
-        # task set and cancel whatever it leaks, or every poll leaks a task.
-        tasks_before = set(asyncio.all_tasks())
         api = PolestarApi(username=cfg.polestar_username, password=cfg.polestar_password)
         try:
             await api.async_init()
@@ -146,15 +142,38 @@ class PolestarEffect(BaseEffect):
             return self._parse(telematics, self._grpc(api, "get_grpc_battery", vin),
                                self._grpc(api, "get_grpc_target_soc", vin))
         finally:
+            await self._release(api)
+
+    @staticmethod
+    async def _release(api: Any) -> None:
+        """Close everything the pypolestar client opened.
+
+        ``async_logout()`` only closes gRPC and the auth session — each gql
+        client keeps a reconnect task parked on an event, and the httpx session
+        keeps its connection pool. Leaking both once per poll (every 30 s, for
+        weeks) is what poisoned the event loop and 500'd the API, so close them
+        explicitly rather than sweeping ``asyncio.all_tasks()``.
+        """
+        for name in ("gql_client_private", "gql_client_public"):
+            client = getattr(api, name, None)
+            if client is None:
+                continue
             try:
-                await api.async_logout()
-            except Exception:
-                pass
-            leaked = set(asyncio.all_tasks()) - tasks_before
-            for task in leaked:
-                task.cancel()
-            if leaked:
-                await asyncio.gather(*leaked, return_exceptions=True)
+                await client.close()
+            except Exception as exc:
+                logger.debug(f"polestar: closing {name} failed: {exc}")
+
+        try:
+            await api.async_logout()
+        except Exception:
+            pass
+
+        session = getattr(api, "client_session", None)
+        if session is not None:
+            try:
+                await session.aclose()
+            except Exception as exc:
+                logger.debug(f"polestar: closing the httpx session failed: {exc}")
 
     @staticmethod
     def _grpc(api: Any, method: str, vin: str) -> Any:
