@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 # mode 0x01 = solid colour ON, 0x02 = segment off.
 _SEGMENT_COUNT = 20
 
+# How long get_status() waits for the device lock before giving up. Effects hold
+# the lock for each segment write (and for the whole sweep when the device is
+# unreachable), so this must stay short: it bounds the latency of /api/status.
+_STATUS_LOCK_TIMEOUT = 1.0
+
 
 def hsv_to_tuya(h: float, s: float, v: float) -> str:
     """Convert HSV (h:0-360, s:0-100, v:0-100) to Tuya 12-char hex.
@@ -248,18 +253,38 @@ class LightbarDriver:
                 self._online = False
                 return False
 
-    def get_status(self) -> dict | None:
-        with self._lock:
-            try:
-                with self._session() as d:
-                    status = d.status()
-                self._online = True
-                # tinytuya returns DP keys as strings; normalise to int.
-                return {int(k): v for k, v in status.get("dps", {}).items()}
-            except Exception as e:
-                logger.warning(f"Lightbar get_status failed: {e}")
+    def get_status(self, lock_timeout: float | None = None) -> dict | None:
+        """Return the device's DPs, or None when it cannot be read.
+
+        ``lock_timeout`` bounds the wait for the device lock (default
+        ``_STATUS_LOCK_TIMEOUT``). An effect holds the lock for every segment
+        write and for the whole sweep when the device is unreachable, so an
+        unbounded wait here makes ``GET /api/status`` hang — and the UI gates its
+        first render on that call. A busy device is reported as unreadable
+        instead of blocking the request.
+        """
+        wait = _STATUS_LOCK_TIMEOUT if lock_timeout is None else lock_timeout
+        if not self._lock.acquire(timeout=wait):
+            logger.debug("Lightbar get_status: device busy, skipping probe")
+            return None
+        try:
+            with self._session() as d:
+                status = d.status()
+            # tinytuya reports an unreachable device as an error dict rather
+            # than raising; without this it reads as "online, no DPs".
+            if not isinstance(status, dict) or status.get("Error"):
+                logger.warning(f"Lightbar get_status failed: {status}")
                 self._online = False
                 return None
+            self._online = True
+            # tinytuya returns DP keys as strings; normalise to int.
+            return {int(k): v for k, v in status.get("dps", {}).items()}
+        except Exception as e:
+            logger.warning(f"Lightbar get_status failed: {e}")
+            self._online = False
+            return None
+        finally:
+            self._lock.release()
 
     @property
     def online(self) -> bool:

@@ -1,6 +1,8 @@
 """Driver encoding tests: HSV<->Tuya hex and the DP 61 segment payload."""
 
 import base64
+import threading
+import time
 
 from lightbar import LightbarDriver, _segment_payload, hsv_to_tuya, tuya_to_hsv
 
@@ -98,3 +100,63 @@ class TestWholeBarStaleness:
         d.set_color(0, 100, 100)
         assert d.whole_bar_stale is False
         assert _decode(_segment_payload(99, None))[12] == 20
+
+
+class _StatusDevice(_FakeDevice):
+    """Fake device whose status() returns a fixed payload."""
+
+    def __init__(self, payload: dict) -> None:
+        super().__init__()
+        self._payload = payload
+
+    def status(self) -> dict:
+        return self._payload
+
+
+class TestStatusProbe:
+    """The status probe must stay bounded: an effect sweep holds the device lock
+    for its whole animation, and /api/status must never block behind it."""
+
+    def test_returns_integer_dp_keys(self, monkeypatch):
+        d = _driver(monkeypatch)
+        payload = {"devId": "dev", "dps": {"20": True, "21": "colour"}}
+        monkeypatch.setattr(d, "_connect", lambda: _StatusDevice(payload))
+
+        assert d.get_status() == {20: True, 21: "colour"}
+        assert d.online is True
+
+    def test_error_payload_is_offline(self, monkeypatch):
+        # tinytuya reports an unreachable device as an error dict, not an
+        # exception — it must not be mistaken for a successful empty status.
+        d = _driver(monkeypatch)
+        monkeypatch.setattr(
+            d,
+            "_connect",
+            lambda: _StatusDevice(
+                {"Error": "Network Error: Unable to Connect", "Err": "901", "Payload": None}
+            ),
+        )
+
+        assert d.get_status() is None
+        assert d.online is False
+
+    def test_does_not_block_while_a_sweep_holds_the_lock(self, monkeypatch):
+        d = _driver(monkeypatch)
+        holding = threading.Event()
+        release = threading.Event()
+
+        def sweep() -> None:
+            with d._lock:
+                holding.set()
+                release.wait(5)
+
+        thread = threading.Thread(target=sweep)
+        thread.start()
+        try:
+            assert holding.wait(5)
+            start = time.monotonic()
+            assert d.get_status(lock_timeout=0.1) is None
+            assert time.monotonic() - start < 1.0
+        finally:
+            release.set()
+            thread.join(5)
