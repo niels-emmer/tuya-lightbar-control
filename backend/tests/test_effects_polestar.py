@@ -42,10 +42,12 @@ def _snapshot(*, soc: int, charging: str, connection: str) -> dict:
 
 def _fake_api(calls: dict, vins: list[str]):
     class FakeGqlClient:
+        """Mirrors ``gql.Client``: async teardown is ``close_async``, no ``close``."""
+
         def __init__(self, name: str) -> None:
             self.name = name
 
-        async def close(self) -> None:
+        async def close_async(self) -> None:
             calls.setdefault("closed_gql", []).append(self.name)
 
     class FakeHttpSession:

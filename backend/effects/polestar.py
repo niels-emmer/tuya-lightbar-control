@@ -153,15 +153,26 @@ class PolestarEffect(BaseEffect):
         keeps its connection pool. Leaking both once per poll (every 30 s, for
         weeks) is what poisoned the event loop and 500'd the API, so close them
         explicitly rather than sweeping ``asyncio.all_tasks()``.
+
+        ``gql.Client`` has no ``close()``; the async teardown is
+        ``close_async()`` (which closes its session and cancels the reconnect
+        task). Failures are logged at warning level: a silent no-op here is
+        exactly what let the leak survive unnoticed.
         """
         for name in ("gql_client_private", "gql_client_public"):
             client = getattr(api, name, None)
             if client is None:
                 continue
+            close = getattr(client, "close_async", None)
+            if close is None:
+                logger.warning(
+                    f"polestar: {name} has no close_async(); its reconnect task may leak"
+                )
+                continue
             try:
-                await client.close()
+                await close()
             except Exception as exc:
-                logger.debug(f"polestar: closing {name} failed: {exc}")
+                logger.warning(f"polestar: closing {name} failed: {exc}")
 
         try:
             await api.async_logout()
@@ -173,7 +184,7 @@ class PolestarEffect(BaseEffect):
             try:
                 await session.aclose()
             except Exception as exc:
-                logger.debug(f"polestar: closing the httpx session failed: {exc}")
+                logger.warning(f"polestar: closing the httpx session failed: {exc}")
 
     @staticmethod
     def _grpc(api: Any, method: str, vin: str) -> Any:
