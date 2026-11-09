@@ -1,6 +1,7 @@
 """Polestar effect: pure parsing/rendering and the run-loop blink (no network)."""
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
 
 import pypolestar
@@ -40,9 +41,25 @@ def _snapshot(*, soc: int, charging: str, connection: str) -> dict:
 
 
 def _fake_api(calls: dict, vins: list[str]):
+    class FakeGqlClient:
+        """Mirrors ``gql.Client``: async teardown is ``close_async``, no ``close``."""
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close_async(self) -> None:
+            calls.setdefault("closed_gql", []).append(self.name)
+
+    class FakeHttpSession:
+        async def aclose(self) -> None:
+            calls["closed_http"] = True
+
     class FakeApi:
         def __init__(self, username: str, password: str) -> None:
             calls["creds"] = (username, password)
+            self.gql_client_private = FakeGqlClient("private")
+            self.gql_client_public = FakeGqlClient("public")
+            self.client_session = FakeHttpSession()
 
         async def async_init(self) -> None:
             calls["init"] = True
@@ -307,3 +324,42 @@ def test_fetch_prefers_configured_vin(monkeypatch):
     asyncio.run(PolestarEffect()._fetch(cfg))
 
     assert calls["vin"] == "CHOSEN"
+
+
+def test_fetch_closes_gql_clients_and_http_session(monkeypatch):
+    """Each poll used to leak two reconnect tasks and an httpx connection pool."""
+    calls: dict = {}
+    monkeypatch.setattr(pypolestar, "PolestarApi", _fake_api(calls, ["VIN1"]))
+    cfg = SimpleNamespace(polestar_username="u", polestar_password="p", polestar_vin="")
+
+    asyncio.run(PolestarEffect()._fetch(cfg))
+
+    assert sorted(calls["closed_gql"]) == ["private", "public"]
+    assert calls["closed_http"] is True
+
+
+def test_fetch_does_not_cancel_tasks_it_did_not_create(monkeypatch):
+    """The old cleanup cancelled every task created during the fetch."""
+    calls: dict = {}
+
+    class TaskSpawningApi(_fake_api(calls, ["VIN1"])):
+        async def update_latest_data(
+            self, vin: str, update_telematics: bool = True
+        ) -> None:
+            calls["vin"] = vin
+            calls["foreign"] = asyncio.create_task(asyncio.sleep(3600))
+
+    monkeypatch.setattr(pypolestar, "PolestarApi", TaskSpawningApi)
+    cfg = SimpleNamespace(polestar_username="u", polestar_password="p", polestar_vin="")
+
+    async def go():
+        try:
+            await PolestarEffect()._fetch(cfg)
+            await asyncio.sleep(0.01)  # let any cancellation land
+            assert not calls["foreign"].done()
+        finally:
+            calls["foreign"].cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await calls["foreign"]
+
+    asyncio.run(go())

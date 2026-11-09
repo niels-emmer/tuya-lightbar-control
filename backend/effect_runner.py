@@ -6,6 +6,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# A healthy effect stops within a couple of device writes. A task still running
+# after this long is abandoned, so one stuck effect cannot wedge the API.
+_STOP_TIMEOUT = 5.0
+
 
 class EffectRunner:
     def __init__(self) -> None:
@@ -37,14 +41,33 @@ class EffectRunner:
         except Exception as e:
             logger.error(f"Effect {effect.name} crashed: {e}", exc_info=True)
         finally:
-            self._current = None
+            # Only clear state this task still owns. An abandoned task that
+            # finishes late must not wipe the effect that replaced it.
+            if self._task is asyncio.current_task():
+                self._current = None
 
     async def stop(self) -> None:
-        if self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        self._task = None
+        """Cancel the running effect. Never raises, never hangs.
+
+        A task can become uncancellable — e.g. one parked in
+        ``await asyncio.gather(<itself>)``, where ``Task.cancel()`` recurses
+        until ``RecursionError``. Letting that escape used to leave the runner
+        permanently poisoned, so every later ``POST /api/effect`` returned 500.
+        """
+        task, self._task = self._task, None
         self._current = None
+        if task is None or task.done():
+            return
+
+        try:
+            task.cancel()
+        except BaseException:
+            logger.exception("Effect task could not be cancelled; abandoning it")
+            return
+
+        # Bounded wait, and asyncio.wait never cancels the task on timeout.
+        done, _ = await asyncio.wait({task}, timeout=_STOP_TIMEOUT)
+        if not done:
+            logger.warning(
+                f"Effect task still running after {_STOP_TIMEOUT}s; abandoning it"
+            )
