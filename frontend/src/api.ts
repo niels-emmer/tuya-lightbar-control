@@ -50,6 +50,14 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Ceiling for a single API call. The app blocks its first render on
+ * /api/status, and the backend reads from the device while an effect may hold
+ * the device lock — an unbounded fetch can leave the page stuck on the loading
+ * screen. Every call must settle so the UI can render an offline state.
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const key = getApiKey();
@@ -58,6 +66,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...options,
     headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
+    signal: options?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   if (res.status === 401) {
